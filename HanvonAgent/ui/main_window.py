@@ -267,7 +267,9 @@ class MainWindow(QMainWindow):
             self,
             "HanvonAgent Hakkında",
             f"HanvonAgent - Hanvon F710 Yönetim\nVersiyon: {get_version()}\n\n"
-            "Hanvon F710 cihaz yönetimi ve kayıt alımı için masaüstü uygulaması."
+            "Hanvon F710 cihaz yönetimi ve kayıt alımı için masaüstü uygulaması.\n\n"
+            "Geliştirici: Yakup T.\n"
+            "E-posta: yakupzz@yahoo.com"
         )
 
     def _real_close(self):
