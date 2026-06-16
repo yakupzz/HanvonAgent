@@ -1,23 +1,45 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
-
-datas = []
-binaries = []
-hiddenimports = []
-tmp_ret = collect_all('PySide6')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[],
+    datas=[
+        ('hanvon.ico', '.'),
+    ],
+    hiddenimports=[
+        'PySide6.QtWidgets',
+        'PySide6.QtCore',
+        'PySide6.QtGui',
+        'dotenv',
+        'sqlalchemy',
+        'sqlalchemy.dialects.sqlite',
+        'pydantic',
+        'apscheduler',
+        'apscheduler.schedulers.background',
+        'apscheduler.triggers.cron',
+        'uvicorn',
+        'fastapi',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'PySide6.QtWebEngine',
+        'PySide6.QtWebEngineCore',
+        'PySide6.QtWebEngineWidgets',
+        'PySide6.QtMultimedia',
+        'PySide6.QtMultimediaWidgets',
+        'PySide6.Qt3DCore',
+        'PySide6.Qt3DRender',
+        'PySide6.QtCharts',
+        'PySide6.QtDataVisualization',
+        'PySide6.QtQuick',
+        'PySide6.QtQml',
+        'PySide6.QtBluetooth',
+        'PySide6.QtLocation',
+        'PySide6.QtPositioning',
+    ],
     noarchive=False,
     optimize=0,
 )
@@ -42,4 +64,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='hanvon.ico',
 )
