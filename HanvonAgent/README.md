@@ -2,8 +2,7 @@
 
 Hanvon F710 parmak izi / yüz tanıma cihazlarından TCP/IP üzerinden personel giriş-çıkış verilerini çeken, yerel olarak depolayan ve harici API'ye ileten Windows masaüstü uygulaması.
 
-**Versiyon:** 0.3.1 | **Platform:** Windows 10/11 | **Python:** 3.10+
-**Geliştirici | Yakup T.**
+**Geliştirici | Yakup T. | Versiyon:** 0.3.1 | **Platform:** Windows 10/11 | **Python:** 3.10+ 
 
 ---
 
@@ -145,7 +144,7 @@ SQLite (`data/hanvon_agent.db`), SQLAlchemy ORM:
 
 ## BridgeApi
 
-Uygulama çalışırken port `8765`'te FastAPI sunucu açılır:
+Yalnızca **servis modunda** (`service_runner.py`) port `8765`'te FastAPI sunucu açılır. GUI modunda çalışmaz.
 
 ```
 GET /api/records              # Tüm kayıtlar (?date=YYYY-MM-DD filtresi)
