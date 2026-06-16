@@ -29,6 +29,7 @@ old_test_file/
 .agents/
 CLAUDE.md
 AGENTS.md
+HanvonAgent/state.md
 HanvonAgent.spec
 
 # Git backup
