@@ -1,0 +1,35 @@
+# Build çıktıları
+dist/
+build/
+*.exe
+
+# Python
+HanvonAgent/venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Veriler ve DB
+HanvonAgent/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Referans (SDK/telif)
+referans/
+
+# Geliştirme araçları
+check_db.py
+debug_migration.py
+debug_service.py
+old_test_file/
+
+# Claude / yerel ayarlar
+.claude/
+.codex/
+.agents/
+
+# Git backup
+.git_backup/
