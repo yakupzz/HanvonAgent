@@ -4,7 +4,7 @@
 
 Hanvon F710 parmak izi/yüz tanıma cihazlarından TCP/IP üzerinden personel giriş-çıkış verilerini otomatik çeken, yerel dosya sistemine kaydeden ve harici bir API'ye ileten Windows masaüstü + servis uygulaması.
 
-**Konum:** `D:\Projeler\F710\HanvonAgent\`
+**Konum:** `HanvonAgent\`
 
 ---
 
@@ -28,7 +28,7 @@ Hanvon F710 parmak izi/yüz tanıma cihazlarından TCP/IP üzerinden personel gi
 ## 3. Proje Klasör Yapısı
 
 ```
-D:\Projeler\F710\HanvonAgent\
+HanvonAgent\
 │
 ├── main.py                        ← Masaüstü uygulama başlatıcı (PySide6 UI)
 ├── service_runner.py              ← Windows Servis başlatıcı (UI yok, arka plan)
@@ -212,7 +212,6 @@ sync_log     (id, device_id, operation, status, message, created_at)
 
 ## 8. Kullanılacak Referanslar
 
-- `D:\Projeler\F710\referans\lib\hanvon\client.rb` — TCP protokol
-- `D:\Projeler\F710\referans\lib\hanvon\crypto.rb` — CommKey XOR algoritması
-- `D:\Projeler\F710\referans\spec\hanvon_crypto_spec.rb` — Test vektörleri
-- `D:\Projeler\F710\HanvonClient.js` — Node.js TCP referans
+- `referans/lib/hanvon/client.rb` — TCP protokol
+- `referans/lib/hanvon/crypto.rb` — CommKey XOR algoritması
+- `referans/spec/hanvon_crypto_spec.rb` — Test vektörleri

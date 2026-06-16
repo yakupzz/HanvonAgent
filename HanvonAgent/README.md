@@ -219,6 +219,4 @@ pytest -v                     # Verbose
 
 ## 📞 İletişim
 
-Sorularınız veya geri bildirimleri için:
-- Email: yakuptaskent@gmail.com
-- GitHub: https://github.com/anthropics/claude-code/issues
+Sorularınız veya geri bildirimleri için GitHub Issues kullanın.

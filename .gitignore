@@ -28,6 +28,8 @@ old_test_file/
 .claude/
 .codex/
 .agents/
+CLAUDE.md
+AGENTS.md
 
 # Git backup
 .git_backup/
