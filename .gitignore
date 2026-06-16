@@ -17,8 +17,6 @@ HanvonAgent/data/
 *.db-shm
 *.db-wal
 
-# Referans (SDK/telif)
-referans/
 
 # Geliştirme araçları
 check_db.py
