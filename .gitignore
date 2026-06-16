@@ -30,6 +30,7 @@ old_test_file/
 .agents/
 CLAUDE.md
 AGENTS.md
+HanvonAgent.spec
 
 # Git backup
 .git_backup/
