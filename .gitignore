@@ -1,7 +1,6 @@
 # Build çıktıları
-dist/
+dist/data/
 build/
-*.exe
 
 # Python
 HanvonAgent/venv/
