@@ -7,7 +7,7 @@ Hanvon F710 parmak izi/yüz tanıma cihazlarından TCP/IP üzerinden personel gi
 ### 1. GUI Uygulamasını Başlat
 
 ```bash
-D:\Projeler\F710\HanvonAgent\start.bat
+start.bat
 ```
 
 **Otomatik olarak:**
@@ -19,7 +19,7 @@ D:\Projeler\F710\HanvonAgent\start.bat
 ### 2. Windows Servisi Kur (Opsiyonel)
 
 ```batch
-D:\Projeler\F710\HanvonAgent\INSTALL_SERVICE.bat
+INSTALL_SERVICE.bat
 ```
 
 **Gerekli:** NSSM (Non-Sucking Service Manager)
@@ -167,7 +167,6 @@ settings     -- Ayarlar (key-value)
 ## 🧪 Testler
 
 ```bash
-cd D:\Projeler\F710\HanvonAgent
 pytest tests/              # Tüm testler
 pytest tests/test_crypto.py   # Crypto testleri
 pytest tests/test_models.py   # Model testleri
