@@ -1,221 +1,178 @@
-# HanvonAgent — Hanvon F710 Yönetim Uygulaması
+# HanvonAgent
 
-Hanvon F710 parmak izi/yüz tanıma cihazlarından TCP/IP üzerinden personel giriş-çıkış verilerini çeken, yerel olarak depolayan ve harici API'ye iten Windows masaüstü + servis uygulaması.
+Hanvon F710 parmak izi / yüz tanıma cihazlarından TCP/IP üzerinden personel giriş-çıkış verilerini çeken, yerel olarak depolayan ve harici API'ye ileten Windows masaüstü uygulaması.
 
-## 🚀 Hızlı Başlangıç
+**Versiyon:** 0.3.1 | **Platform:** Windows 10/11 | **Python:** 3.10+
 
-### 1. GUI Uygulamasını Başlat
+---
 
-```bash
+## Gereksinimler
+
+- Python 3.10+
+- NSSM (servis modu için): https://nssm.cc/download
+
+---
+
+## Kurulum ve Başlatma
+
+### GUI Modu
+
+```batch
 start.bat
 ```
 
-**Otomatik olarak:**
-- Python 3.10+ kontrol eder
-- Virtual environment oluşturur
-- Bağımlılıkları kurar (`pip install -r requirements.txt`)
-- GUI açılır (4 sekmeli)
+İlk çalıştırmada venv oluşturur ve bağımlılıkları kurar, ardından GUI açılır.
 
-### 2. Windows Servisi Kur (Opsiyonel)
+### Windows Servisi (Opsiyonel)
+
+GUI'de **Servis** menüsünden "Servisi Kur" seçin (Admin gerektirir).  
+NSSM'in `nssm.exe` dosyası proje klasöründe veya PATH'te olmalıdır.
 
 ```batch
-INSTALL_SERVICE.bat
+nssm start HanvonAgent    # başlat
+nssm stop HanvonAgent     # durdur
+nssm status HanvonAgent   # durum
+nssm remove HanvonAgent   # kaldır
 ```
 
-**Gerekli:** NSSM (Non-Sucking Service Manager)
-- İndir: https://nssm.cc/download
-- PATH'e ekle veya venv/Scripts'e koy
+### EXE Paketi (Dağıtım)
 
-**Kurulum sonrası:**
 ```batch
-nssm start HanvonAgent      # Servisi başlat
-nssm stop HanvonAgent       # Servisi durdur
-nssm status HanvonAgent     # Durumu göster
-nssm remove HanvonAgent     # Kaldır (confirm gerekir)
+build.bat
 ```
 
----
-
-## 📋 Özellikler
-
-### GUI Mode (Desktop)
-- **4 Tab:** Panolar, Ayarlar, Kayıtlar, Cihaz Yönetimi
-- **Cihaz Yönetimi:** Ekle, test, bağlan
-- **Kayıt Çekme:** Cihazdan manuel veri çek
-- **API Push:** Verileri harici API'ye gönder
-- **System Tray:** Arka planda çalışma
-- **Real-time Dashboard:** İstatistikler, sağlık durumu
-
-### Service Mode (Background)
-- **Otomatik Polling:** Belirli aralıkla cihazlardan kayıt çek
-- **Otomatik Push:** Belirli aralıkla verileri API'ye gönder
-- **BridgeApi:** GET endpoint'leri (dış sistem entegrasyonu)
-- **Logging:** Detaylı log dosyaları (logs/hanvon_service.log)
-- **No GUI:** Arka planda sessizce çalışır
+`dist/HanvonAgent.exe` oluşturur. Hedef makinede Python kurulu olmak zorunda değildir.
 
 ---
 
-## 🎯 Kullanım Senaryoları
+## Özellikler
 
-### Senaryo 1: Cihazdan Manuel Veri Çek
-1. `start.bat` çalıştır
-2. **Ayarlar** tab'ında cihaz ekle (IP + CommKey)
-3. "Cihaz Ekle" → "Bağlantıyı Test Et"
-4. **Panolar** tab'ında "Şimdi Çek" butonu
-5. Veriler `data/YYYY/MM/DD.json` altında kaydedilir
+### Dashboard
 
-### Senaryo 2: Otomatik Arka Plan Çalışması
-1. `INSTALL_SERVICE.bat` çalıştır (Admin)
-2. Ayarlar'dan poll_enabled ve push_enabled aç
-3. `nssm start HanvonAgent`
-4. Servis otomatik olarak belirli aralıkla:
-   - Cihazlardan kayıt çeker
-   - Yerel DB'ye kaydeder
-   - API'ye gönderir (eğer endpoint varsa)
+- Kayıtlı cihazları listeler, her biri için otomatik çekme zamanlaması ayarlanabilir
+- Manuel "Verileri Çek" — seçili cihazlardan anlık kayıt çeker
+- "G/C verisi çekilen personelin verisini cihazdan temizle" seçeneği: işaretlenirse çekme sonrası `DeleteAllRecord()` gönderir
+- API'ye "Yeniden Gönder" butonu: başarısız kayıtları tekrar iletir
 
-### Senaryo 3: Dış Sistem Entegrasyonu
-1. Servis başlatıldığında BridgeApi (port 8765) açılır
-2. Dış sistemler GET istekleri gönderebilir:
+### Cihaz Yönetimi
 
-```bash
-# Günlük kayıtları al
-curl http://localhost:8765/api/records?date=2026-06-09
+- Cihaz bilgisi görüntüleme (`GetDeviceInfo`)
+- PC saatini cihaza yazma (`SetDeviceInfo`)
+- Personel listesi çekme ve yerel DB'ye kaydetme
+- Cihazlar arası personel transferi (kaynak → hedef)
 
-# Cihaz listesi
-curl http://localhost:8765/api/devices
+### Kayıtlar
 
-# Personel listesi
-curl http://localhost:8765/api/employees
+- Tarih ve cihaz filtresiyle kayıt görüntüleme
+- Push durumu takibi (pending / sent / failed)
 
-# Uygulama durumu
-curl http://localhost:8765/api/status
-```
+### Ayarlar
+
+- Cihaz ekle / düzenle / sil
+- API endpoint ve Bearer token ayarı
+- Otomatik çekme ve push zamanlaması (cihaz bazlı)
 
 ---
 
-## 📁 Proje Yapısı
+## Proje Yapısı
 
 ```
 HanvonAgent/
-├── core/              # TCP client + XOR crypto
-├── models/            # SQLAlchemy ORM (Device, Employee, Record, Setting)
-├── services/          # RecordService, PushService, SchedulerService
-├── bridge_api/        # FastAPI HTTP sunucu
-├── ui/                # PySide6 GUI (4 sekmeli)
-├── tests/             # 65 unit test
-├── main.py            # GUI entry point
-├── service_runner.py  # Windows Service entry point
-├── start.bat          # GUI launcher
-├── INSTALL_SERVICE.bat # Service installer
-├── requirements.txt   # Python dependencies
-├── hanvon_agent.db    # SQLite database (otomatik oluşur)
-└── data/              # Yerel kayıt dosyaları (YYYY/MM/DD.json)
+├── main.py                  # GUI başlatıcı
+├── service_runner.py        # Servis başlatıcı (UI yok)
+├── __version__.py           # Versiyon
+├── requirements.txt
+├── start.bat                # GUI launcher
+├── build.bat                # PyInstaller build
+├── HanvonAgent.spec         # PyInstaller konfigürasyonu
+├── nssm.exe                 # Servis yöneticisi
+│
+├── core/
+│   ├── hanvon_client.py     # TCP bağlantı + komut gönderme
+│   ├── hanvon_crypto.py     # CommKey XOR şifreleme
+│   ├── record_parser.py     # Yanıt parse
+│   ├── secret_store.py      # DPAPI ile CommKey şifreleme
+│   └── app_paths.py         # Exe/dev ortam path çözümleme
+│
+├── models/
+│   ├── device.py            # devices tablosu
+│   ├── employee.py          # employees tablosu
+│   ├── record.py            # records tablosu
+│   └── setting.py           # settings tablosu (key-value)
+│
+├── services/
+│   ├── record_service.py        # Kayıt çekme ve DB'ye yazma
+│   ├── push_service.py          # API push + retry
+│   ├── scheduler_service.py     # APScheduler otomatik çekme/push
+│   ├── employee_sync_service.py # Personel senkronizasyonu
+│   ├── device_transfer_service.py # Cihazlar arası transfer
+│   ├── device_push_worker.py    # Transfer iş parçacığı
+│   └── service_manager.py       # NSSM servis yönetimi
+│
+├── bridge_api/
+│   ├── server.py            # FastAPI sunucu (ayrı thread)
+│   └── routes/records.py    # GET /api/records endpoint'leri
+│
+├── ui/
+│   ├── main_window.py       # Ana pencere + sistem tray
+│   ├── tabs/
+│   │   ├── dashboard_tab.py     # Cihaz listesi + veri çekme
+│   │   ├── device_mgmt_tab.py   # Cihaz bilgisi + personel yönetimi
+│   │   ├── records_tab.py       # Kayıt görüntüleme + push durumu
+│   │   └── settings_tab.py      # Cihaz, API, zamanlama ayarları
+│   └── dialogs/
+│       ├── add_device_dialog.py
+│       └── device_transfer_dialog.py
+│
+└── tests/                   # 202 unit test
 ```
 
 ---
 
-## ⚙️ Ayarlar (Settings)
+## Veritabanı
 
-Database'de key-value şeklinde kaydedilir:
+SQLite (`data/hanvon_agent.db`), SQLAlchemy ORM:
 
-| Key | Değer | Varsayılan |
-|-----|-------|-----------|
-| `poll_enabled` | true/false | false |
-| `poll_interval` | saniye | 1800 (30 dk) |
-| `push_enabled` | true/false | false |
-| `push_interval` | saniye | 3600 (1 saat) |
-| `api_endpoint` | URL | — |
-| `api_token` | Bearer token | — |
-
-**GUI'den değiştir:** Ayarlar → Poll/Push sections → Kaydet
+| Tablo | İçerik |
+|-------|--------|
+| `devices` | IP, CommKey (DPAPI şifreli), etkin durum |
+| `employees` | Personel bilgisi, kart numarası, cihaz ilişkisi |
+| `records` | Giriş-çıkış kaydı, push durumu (pending/sent/failed) |
+| `settings` | key-value ayarlar (API token, zamanlama vb.) |
 
 ---
 
-## 🔌 API Endpoints (BridgeApi)
+## BridgeApi
 
-**Host:** http://localhost:8765
+Uygulama çalışırken port `8765`'te FastAPI sunucu açılır:
 
-| Method | Endpoint | Açıklama |
-|--------|----------|----------|
-| `GET` | `/api/status` | Uygulama durumu, istatistikler |
-| `GET` | `/api/devices` | Cihaz listesi |
-| `GET` | `/api/records` | Tüm kayıtlar (filter: date, device_ip, push_status) |
-| `GET` | `/api/records/{date}` | Belirli tarih (YYYY-MM-DD) |
-| `GET` | `/api/employees` | Personel listesi |
-
----
-
-## 📊 Database Schema
-
-```sql
-devices      -- Hanvon cihazları
-├── id, name, ip, comm_key_encrypted, enabled, last_connected, created_at
-
-employees    -- Personel kayıtları
-├── id, employee_device_id, name, card_num, check_type, device_id, last_synced
-
-records      -- Giriş-çıkış kayıtları
-├── id, device_id, employee_id, record_time, status, card_src, 
-│   source (device|manual), push_status (pending|sent|failed), pushed_at
-
-settings     -- Ayarlar (key-value)
-├── key (PK), value, updated_at
+```
+GET /api/records              # Tüm kayıtlar (?date=YYYY-MM-DD filtresi)
+GET /api/records/{date}       # Belirli gün
+GET /api/devices              # Cihaz listesi
+GET /api/employees            # Personel listesi
+GET /api/status               # Uygulama sağlık durumu
 ```
 
 ---
 
-## 🧪 Testler
+## Testler
 
 ```bash
-pytest tests/              # Tüm testler
-pytest tests/test_crypto.py   # Crypto testleri
-pytest tests/test_models.py   # Model testleri
-pytest -v                     # Verbose
+pytest tests/
+pytest tests/ -v
 ```
 
-**65/65 testler pass ✅**
+202 test pass.
 
 ---
 
-## 🔧 Troubleshooting
+## Protokol Notları
 
-### "Python bulunamadı"
-- Python 3.10+ kur: https://www.python.org/downloads/
-- PATH'e ekle
-
-### "PySide6 kurulumunda hata"
-- requirements.txt güncellenmiş, venv temizle:
-  ```batch
-  rmdir /s /q venv
-  start.bat  # Yeniden çalıştır
-  ```
-
-### "Service kurulumunda hata"
-- NSSM indir: https://nssm.cc/download
-- Çıkan nssm.exe'yi venv/Scripts/ veya PATH'e koy
-- INSTALL_SERVICE.bat'i Admin olarak çalıştır
-
-### "Cihaza bağlanamıyor"
-- IP adresi doğru mu? (172.16.1.218 vb.)
-- CommKey (şifre) doğru mu?
-- Ağda bağlantı var mı?
-- Firewall 9922 portunu engellemiyor mu?
-
-### "Log dosyaları nerede?"
-- GUI: Konsol çıkışı
-- Service: `logs/hanvon_service.log`
-
----
-
-## 📝 Lisans & Bilgiler
-
-**Proje:** HanvonAgent (Hanvon F710 Manager)  
-**Durum:** Production Ready (Beta)  
-**Geliştirici:** Claude Code (AI)  
-**Tarih:** 2026-06-09
-
----
-
-## 📞 İletişim
-
-Sorularınız veya geri bildirimleri için GitHub Issues kullanın.
+| Konu | Detay |
+|------|-------|
+| Port | 9922 (sabit) |
+| Protokol | Plain-text TCP, CRLF |
+| Şifreleme | XOR stream cipher (CommKey 1–8 rakam) |
+| DeleteAllRecord | F710'da parametresiz — tüm G/C kayıtları silinir |
+| GetRecord | `start_time` ve `end_time` zorunlu (format: `YYYY-M-D H:M:S`) |
