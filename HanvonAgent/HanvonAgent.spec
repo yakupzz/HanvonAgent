@@ -5,7 +5,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('hanvon.ico', '.'),
+        ('hanvon.ico', 'HanvonAgent'),
     ],
     hiddenimports=[
         'PySide6.QtWidgets',
