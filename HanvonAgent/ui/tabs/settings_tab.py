@@ -476,7 +476,7 @@ class SettingsTab(QWidget):
         try:
             resp = httpx.post(
                 endpoint,
-                json={"records": []},
+                json={"devices": []},
                 headers=headers,
                 timeout=5,
             )

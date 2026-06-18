@@ -59,6 +59,7 @@ class RecordService:
         logger = logging.getLogger("HanvonAgent.RecordService")
 
         today = datetime.now()
+        pull_date = today.strftime("%Y-%m-%d")
         file_path = self.data_dir / today.strftime("%Y") / today.strftime("%m") / f"{today.strftime('%d')}.json"
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -70,6 +71,12 @@ class RecordService:
                 device_id=device.id,
                 employee_device_id=emp_id,
             ).first()
+
+            # Cihazdan gelen ismi DB'ye yaz (boşsa veya farklıysa)
+            remote_name = remote_rec.get('name', '').strip()
+            if employee and remote_name and employee.name != remote_name:
+                employee.name = remote_name
+                self.session.add(employee)
 
             # Duplicate kontrol (reprocess ise geç)
             emp_id_str = str(emp_id) if emp_id > 0 else '?'
@@ -109,7 +116,8 @@ class RecordService:
                 card_src=remote_rec.get('card_src', ''),
                 source='device',
                 push_status='pending',
-                file_path=str(file_path)
+                file_path=str(file_path),
+                pull_date=pull_date,
             )
             self.session.add(record)
             created_records.append(record)
@@ -147,6 +155,7 @@ class RecordService:
             if date_str not in by_date:
                 by_date[date_str] = {
                     'device_ip': record.device.ip,
+                    'device_name': record.device.name,
                     'pulled_at': datetime.now().isoformat(),
                     'records': []
                 }
@@ -184,6 +193,7 @@ class RecordService:
                 device_data['records'] = data['records']
                 device_data['records'].sort(key=lambda x: x['time'])
                 device_data['pulled_at'] = data['pulled_at']
+                device_data['device_name'] = data['device_name']
             else:
                 existing.append(data)
 
@@ -193,6 +203,7 @@ class RecordService:
                 for i, device_entry in enumerate(existing):
                     f.write('  {\n')
                     f.write(f'    "device_ip": "{device_entry["device_ip"]}",\n')
+                    f.write(f'    "device_name": "{device_entry.get("device_name", "")}",\n')
                     f.write(f'    "pulled_at": "{device_entry["pulled_at"]}",\n')
                     f.write('    "records": [\n')
 

@@ -45,6 +45,32 @@ def init_db():
     inspector = inspect(engine)
     records_columns = [col['name'] for col in inspector.get_columns('records')]
 
+    if 'pull_date' not in records_columns:
+        with engine.connect() as conn:
+            conn.execute(text('ALTER TABLE records ADD COLUMN pull_date VARCHAR(10)'))
+            conn.commit()
+        # Mevcut kayıtları file_path'ten backfill et
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT id, file_path, created_at FROM records WHERE pull_date IS NULL"
+            )).fetchall()
+            for row in rows:
+                file_path = row[1]
+                pull_date = None
+                if file_path:
+                    import re
+                    m = re.search(r'(\d{4})[/\\](\d{2})[/\\](\d{2})\.json', file_path)
+                    if m:
+                        pull_date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+                if not pull_date and row[2]:
+                    pull_date = str(row[2])[:10]
+                if pull_date:
+                    conn.execute(
+                        text("UPDATE records SET pull_date = :pd WHERE id = :id"),
+                        {"pd": pull_date, "id": row[0]}
+                    )
+            conn.commit()
+
     if 'employee_device_id' not in records_columns:
         with engine.connect() as conn:
             conn.execute(text('ALTER TABLE records ADD COLUMN employee_device_id VARCHAR(20)'))

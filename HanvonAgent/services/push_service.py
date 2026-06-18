@@ -117,39 +117,41 @@ class PushService:
 
     def _build_payload(self, records: List[Record]) -> Dict[str, Any]:
         """
-        Push payload oluştur.
+        BizBize batch payload.
 
         Format:
         {
-            "records": [
+            "devices": [
                 {
                     "device_ip": "...",
-                    "record_time": "...",
-                    "employee_id": "...",
-                    "status": "...",
-                    "card_src": "...",
-                    "source": "device|manual"
-                },
-                ...
+                    "device_name": "...",
+                    "records": [
+                        {"time": "...", "id": "...", "status": "..."},
+                        ...
+                    ]
+                }
             ]
         }
         """
-        payload = {
-            'records': []
+        device = records[0].device
+        return {
+            'devices': [
+                {
+                    'device_ip': device.ip,
+                    'device_name': device.name,
+                    'records': [
+                        {
+                            'time': record.record_time,
+                            'id': record.employee_device_id,
+                            'name': record.employee.name if record.employee else '',
+                            'status': record.status,
+                            'card_src': record.card_src,
+                        }
+                        for record in records
+                    ]
+                }
+            ]
         }
-
-        for record in records:
-            payload['records'].append({
-                'device_ip': record.device.ip,
-                'record_time': record.record_time,
-                'employee_id': record.employee.employee_device_id if record.employee else None,
-                'employee_name': record.employee.name if record.employee else '',
-                'status': record.status,
-                'card_src': record.card_src,
-                'source': record.source,
-            })
-
-        return payload
 
     def _get_api_endpoint(self) -> str:
         """Setting'den API endpoint'i oku."""

@@ -176,3 +176,10 @@ pytest tests/ -v
 | Şifreleme | XOR stream cipher (CommKey 1–8 rakam) |
 | DeleteAllRecord | F710'da parametresiz — tüm G/C kayıtları silinir |
 | GetRecord | `start_time` ve `end_time` zorunlu (format: `YYYY-M-D H:M:S`) |
+
+---
+
+## Hakkımızda
+
+**Geliştirici:** Yakup T.
+**E-posta:** yakupzz@yahoo.com

@@ -22,6 +22,7 @@ class Record(Base):
     status = Column(String(10))  # 1, 2, vb.
     card_src = Column(String(50))  # from_door, from_check, NULL
     file_path = Column(String(500), nullable=True)  # data/YYYY/MM/DD.json
+    pull_date = Column(String(10), nullable=True, index=True)  # YYYY-MM-DD — çekildiği gün
     source = Column(String(50), default="device")  # device, manual
     push_status = Column(String(20), default="pending", index=True)  # pending, sent, failed
     pushed_at = Column(DateTime, nullable=True)
