@@ -31,21 +31,8 @@ echo.
 cd /d "%PROJECT_DIR%"
 
 %VENV_PYTHON% -m PyInstaller ^
-    --onefile ^
-    --windowed ^
-    --name "HanvonAgent" ^
-    --icon "%PROJECT_DIR%hanvon.ico" ^
-    --add-data "%PROJECT_DIR%hanvon.ico;." ^
-    --add-data "%PROJECT_DIR%hanvon_agent.db;." ^
-    --hidden-import=PySide6 ^
-    --hidden-import=sqlalchemy ^
-    --hidden-import=apscheduler ^
-    --hidden-import=fastapi ^
-    --hidden-import=uvicorn ^
-    --hidden-import=pydantic ^
-    --collect-all PySide6 ^
-    --optimize 2 ^
-    "%PROJECT_DIR%main.py"
+    --clean ^
+    "%PROJECT_DIR%HanvonAgent.spec"
 
 if errorlevel 1 (
     echo [HATA] Build basarisiz

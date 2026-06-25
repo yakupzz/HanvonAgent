@@ -47,8 +47,8 @@ class MainWindow(QMainWindow):
             from __version__ import get_version
             version = get_version()
             self.setWindowTitle(f"HanvonAgent - Hanvon F710 Yonetim ({version})")
-            self.setGeometry(100, 100, 1000, 640)
-            self.setFixedSize(1000, 640)
+            self.setGeometry(100, 100, 1050, 640)
+            self.setFixedSize(1050, 640)
             self._allow_close = False  # X basıldığında gizle (True ise kapat)
 
             # Icon set (PyInstaller bundled ve dev mode desteği)

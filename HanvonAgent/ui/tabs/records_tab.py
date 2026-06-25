@@ -198,6 +198,12 @@ class RecordsTab(QWidget):
         filter_group = QGroupBox("Filtreler")
         filter_layout = QHBoxLayout()
 
+        self.date_mode_combo = QComboBox()
+        self.date_mode_combo.addItem("Çekme Tarihi", "pull_date")
+        self.date_mode_combo.addItem("Kayıt Tarihi", "record_time")
+        self.date_mode_combo.currentIndexChanged.connect(self._load_records)
+        filter_layout.addWidget(self.date_mode_combo)
+
         filter_layout.addWidget(QLabel("Tarih:"))
         self.date_input = QDateEdit()
         self.date_input.setDate(QDate.currentDate())
@@ -331,10 +337,15 @@ class RecordsTab(QWidget):
             push_status = self.status_combo.currentData()
             personel_id = self.personel_id_input.text().strip()
 
-            # Query — çekildiği güne göre filtrele (pull_date), record_time'a göre değil
-            query = self.session.query(Record).filter(
-                Record.pull_date == date_str
-            )
+            date_mode = self.date_mode_combo.currentData()
+            if date_mode == "record_time":
+                query = self.session.query(Record).filter(
+                    Record.record_time.like(f"{date_str}%")
+                )
+            else:
+                query = self.session.query(Record).filter(
+                    Record.pull_date == date_str
+                )
 
             if device_id:
                 query = query.filter(Record.device_id == device_id)

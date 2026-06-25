@@ -5,9 +5,9 @@ REM Exe'yi konsol penceresi göstermeden çalıştır
 cd /d "%~dp0"
 
 REM dist\HanvonAgent.exe varsa (production), onu çalıştır
-if exist "..\dist\HanvonAgent.exe" (
+if exist "dist\HanvonAgent.exe" (
     REM VBScript ile exe'yi gizli modda çalıştır
-    cscript.exe "%~dp0run_hidden.vbs" "%~dp0..\dist\HanvonAgent.exe"
+    cscript.exe "%~dp0run_hidden.vbs" "%~dp0dist\HanvonAgent.exe"
     exit /b %errorlevel%
 )
 

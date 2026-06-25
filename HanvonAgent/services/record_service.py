@@ -189,8 +189,11 @@ class RecordService:
                 None
             )
             if device_data:
-                # Sadece yeni veriyi tut
-                device_data['records'] = data['records']
+                # Mevcut kayıtları koru, sadece yeni olanları ekle (by time dedup)
+                existing_times = {r['time'] for r in device_data['records']}
+                for rec in data['records']:
+                    if rec['time'] not in existing_times:
+                        device_data['records'].append(rec)
                 device_data['records'].sort(key=lambda x: x['time'])
                 device_data['pulled_at'] = data['pulled_at']
                 device_data['device_name'] = data['device_name']

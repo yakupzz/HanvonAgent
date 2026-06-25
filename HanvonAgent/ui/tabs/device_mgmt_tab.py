@@ -5,7 +5,7 @@ Cihaz Yönetimi sekmesi
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QLineEdit, QSpinBox,
-    QDialog, QTextEdit, QProgressBar, QStyledItemDelegate
+    QDialog, QTextEdit, QProgressBar, QStyledItemDelegate, QFileDialog
 )
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtCore import Qt, QCoreApplication, QTimer
@@ -158,6 +158,12 @@ class DeviceMgmtTab(QWidget):
         self.bulk_send_btn.clicked.connect(self._bulk_send_employees)
         self.bulk_send_btn.setEnabled(False)
         filter_layout.addWidget(self.bulk_send_btn)
+
+        self.export_btn = QPushButton("📊 Export")
+        self.export_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }")
+        self.export_btn.clicked.connect(self._export_employees_to_excel)
+        self.export_btn.setEnabled(False)
+        filter_layout.addWidget(self.export_btn)
 
         emp_layout.addLayout(filter_layout)
 
@@ -362,6 +368,7 @@ class DeviceMgmtTab(QWidget):
         # Bulk send butonunu enable/disable et
         has_pending = any(emp.sync_status == "yeni" for emp in self.current_employees)
         self.bulk_send_btn.setEnabled(has_pending)
+        self.export_btn.setEnabled(bool(self.current_employees))
 
     def _build_action_widget(self, row, emp, row_color, is_pending):
         """Bir satırın işlem butonlarını (✎ düzenle, 📤 gönder, ✕ sil) oluştur."""
@@ -1033,6 +1040,81 @@ Debug: Konsol çıktısını kontrol edin"""
         layout.addWidget(close_btn)
 
         progress_dialog.exec()
+
+    def _export_employees_to_excel(self):
+        """Seçili cihazdaki personelleri XLS olarak dışa aktar."""
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+        except ImportError:
+            QMessageBox.critical(self, "Hata", "openpyxl kütüphanesi bulunamadı.\npip install openpyxl")
+            return
+
+        if not self.current_employees:
+            QMessageBox.information(self, "Bilgi", "Dışa aktarılacak personel yok.")
+            return
+
+        device_id = self.device_combo.currentData()
+        device = self.session.query(Device).filter_by(id=device_id).first()
+        device_label = device.ip if device else f"device_{device_id}"
+
+        default_name = f"personeller_{device_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Excel Olarak Kaydet", default_name,
+            "Excel Dosyası (*.xlsx)"
+        )
+        if not path:
+            return
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Personeller"
+
+        # Başlık satırı
+        headers = ["#", "Cihaz ID", "İsim", "Bekleyen İsim", "Kart No", "Tür", "Yetki", "Sync", "Son Senkron", "Oluşturulma"]
+        header_fill = PatternFill(start_color="1565C0", end_color="1565C0", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        # Veri satırları
+        pending_fill = PatternFill(start_color="FFF9C4", end_color="FFF9C4", fill_type="solid")
+        for row_idx, emp in enumerate(self.current_employees, 2):
+            row_data = [
+                row_idx - 1,
+                emp.employee_device_id,
+                emp.name or "",
+                emp.pending_name or "",
+                emp.card_num or "",
+                emp.check_type or "",
+                emp.authority or "",
+                emp.sync_status or "",
+                emp.last_synced.strftime("%Y-%m-%d %H:%M:%S") if emp.last_synced else "",
+                emp.created_at.strftime("%Y-%m-%d %H:%M:%S") if emp.created_at else "",
+            ]
+            for col_idx, val in enumerate(row_data, 1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=val)
+                if emp.sync_status == "yeni":
+                    cell.fill = pending_fill
+
+        # Sütun genişliklerini otomatik ayarla
+        col_widths = [5, 10, 30, 30, 16, 12, 10, 8, 20, 20]
+        for col_idx, width in enumerate(col_widths, 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width
+
+        try:
+            wb.save(path)
+            QMessageBox.information(
+                self, "Başarılı",
+                f"{len(self.current_employees)} personel dışa aktarıldı:\n{path}"
+            )
+            logger.info(f"[EXPORT] {len(self.current_employees)} personel → {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Dosya kaydedilemedi:\n{str(e)}")
+            logger.error(f"[EXPORT] Kayıt hatası: {e}")
 
     def _write_audit_log_bulk_send(self, employees, successful_count, failed_count, device_id):
         """Toplu gönderme işlemini audit log'a yaz."""
