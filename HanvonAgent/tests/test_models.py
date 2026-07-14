@@ -64,6 +64,24 @@ class TestDeviceModel:
         device_db = db_session.query(Device).filter_by(ip="172.16.1.219").first()
         assert device_db.last_connected is None
 
+    def test_device_default_port(self, db_session):
+        """Cihaz port belirtilmezse varsayılan 9922 kullanılır."""
+        device = Device(name="Cihaz", ip="172.16.1.230", enabled=True)
+        db_session.add(device)
+        db_session.commit()
+
+        device_db = db_session.query(Device).filter_by(ip="172.16.1.230").first()
+        assert device_db.port == 9922
+
+    def test_device_custom_port(self, db_session):
+        """Cihaz özel port ile kaydedilebilir ve okunabilir."""
+        device = Device(name="Cihaz", ip="172.16.1.231", port=19922, enabled=True)
+        db_session.add(device)
+        db_session.commit()
+
+        device_db = db_session.query(Device).filter_by(ip="172.16.1.231").first()
+        assert device_db.port == 19922
+
     def test_device_timestamps(self, db_session):
         """Cihaz created_at otomatik."""
         before = datetime.utcnow()
@@ -408,6 +426,47 @@ class TestEmployeeMigration:
         finally:
             base_module.engine.dispose()
             # Modülü orijinal haline döndür (diğer testleri etkilememesi için)
+            monkeypatch.delenv("HANVON_DB_PATH", raising=False)
+            importlib.reload(base_module)
+
+
+class TestDeviceMigration:
+    """init_db() additive migration testi — devices.port sütunu."""
+
+    def test_init_db_adds_port_column_to_existing_db(self, tmp_path, monkeypatch):
+        """Eski şemalı DB'de init_db() port sütununu 9922 default ile ekler."""
+        import importlib
+        from sqlalchemy import create_engine, text, inspect
+
+        db_file = tmp_path / "legacy_port.db"
+
+        legacy_engine = create_engine(f"sqlite:///{db_file}")
+        Base.metadata.create_all(legacy_engine)
+        with legacy_engine.connect() as conn:
+            conn.execute(text("ALTER TABLE devices DROP COLUMN port"))
+            conn.execute(text(
+                "INSERT INTO devices (name, ip, enabled) VALUES ('Eski Cihaz', '172.16.1.240', 1)"
+            ))
+            conn.commit()
+        legacy_engine.dispose()
+
+        monkeypatch.setenv("HANVON_DB_PATH", str(db_file))
+        import models.base as base_module
+        importlib.reload(base_module)
+        try:
+            base_module.init_db()
+
+            inspector = inspect(base_module.engine)
+            cols = [c["name"] for c in inspector.get_columns("devices")]
+            assert "port" in cols
+
+            with base_module.engine.connect() as conn:
+                row = conn.execute(text(
+                    "SELECT port FROM devices WHERE ip='172.16.1.240'"
+                )).fetchone()
+            assert row[0] == 9922
+        finally:
+            base_module.engine.dispose()
             monkeypatch.delenv("HANVON_DB_PATH", raising=False)
             importlib.reload(base_module)
 

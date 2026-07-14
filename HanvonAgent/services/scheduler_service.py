@@ -212,7 +212,7 @@ def _run_auto_fetch(device_id: int):
         if delete_setting and delete_setting.value == "1":
             from core.hanvon_client import HanvonClient
             try:
-                client = HanvonClient(device.ip, comm_key=device.comm_key)
+                client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
                 client.connect()
                 ok = client.delete_all_records_now()
                 client.disconnect()

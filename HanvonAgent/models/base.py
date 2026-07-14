@@ -104,6 +104,14 @@ def init_db():
                 conn.execute(text(f'ALTER TABLE employees ADD COLUMN {col_name} {col_type}'))
                 conn.commit()
 
+    # Schema migration: devices tablosuna port sütunu ekle (varsa geç)
+    devices_columns = [col['name'] for col in inspector.get_columns('devices')]
+
+    if 'port' not in devices_columns:
+        with engine.connect() as conn:
+            conn.execute(text('ALTER TABLE devices ADD COLUMN port INTEGER DEFAULT 9922'))
+            conn.commit()
+
     # Secret migration: düz metin CommKey'leri DPAPI ile şifrele (idempotent —
     # "dpapi:" prefix'li değerler atlanır). Hata olursa açılışı engelleme.
     try:

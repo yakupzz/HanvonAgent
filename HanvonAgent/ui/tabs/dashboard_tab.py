@@ -155,6 +155,11 @@ class DashboardTab(QWidget):
         self.device_ip_input.setPlaceholderText("Örn: 172.16.1.218")
         form_layout.addRow("IP Adresi:", self.device_ip_input)
 
+        self.device_port_input = QSpinBox()
+        self.device_port_input.setRange(1, 65535)
+        self.device_port_input.setValue(9922)
+        form_layout.addRow("Port:", self.device_port_input)
+
         self.device_commkey_input = QLineEdit()
         self.device_commkey_input.setPlaceholderText("Örn: 12345678 (boş bırakabilir)")
         form_layout.addRow("CommKey (Şifre):", self.device_commkey_input)
@@ -364,7 +369,7 @@ class DashboardTab(QWidget):
                 if del_setting and del_setting.value == "1":
                     try:
                         from core.hanvon_client import HanvonClient
-                        client = HanvonClient(device.ip, comm_key=device.comm_key)
+                        client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
                         client.connect()
                         ok = client.delete_all_records_now()
                         client.disconnect()
@@ -420,6 +425,7 @@ class DashboardTab(QWidget):
             self.editing_device_id = None
             self.device_name_input.clear()
             self.device_ip_input.clear()
+            self.device_port_input.setValue(9922)
             self.device_commkey_input.clear()
             self.delete_after_pull_cb.setChecked(False)
             self.device_form_group.setTitle("Yeni Cihaz Ekle")
@@ -427,20 +433,21 @@ class DashboardTab(QWidget):
     def _test_device_connection(self):
         """Cihaz baglantisini test et."""
         ip = self.device_ip_input.text().strip()
+        port = self.device_port_input.value()
         commkey = self.device_commkey_input.text().strip() or None
 
         if not ip:
             QMessageBox.warning(self, "Uyarı", "IP adresi giriniz")
             return
 
-        msg = f"\n[TEST] {ip} ile baglanti sinanıyor..."
+        msg = f"\n[TEST] {ip}:{port} ile baglanti sinanıyor..."
         self.output_text.append(msg)
         logger.info(msg.strip())
         self._process_events()
 
         try:
             from core.hanvon_client import HanvonClient
-            client = HanvonClient(ip, comm_key=commkey)
+            client = HanvonClient(ip, port=port, comm_key=commkey)
             client.connect()
             info = client.get_device_info()
             client.disconnect()
@@ -462,13 +469,14 @@ class DashboardTab(QWidget):
     def _sync_device_time(self):
         """Cihazin saatini sorgula, goster, sonra guncelle."""
         ip = self.device_ip_input.text().strip()
+        port = self.device_port_input.value()
         commkey = self.device_commkey_input.text().strip() or None
 
         if not ip:
             QMessageBox.warning(self, "Uyarı", "IP adresi giriniz")
             return
 
-        msg = f"\n[SAAT] {ip} mevcut saat sorgulanıyor..."
+        msg = f"\n[SAAT] {ip}:{port} mevcut saat sorgulanıyor..."
         self.output_text.append(msg)
         logger.info(msg.strip())
         self._process_events()
@@ -477,7 +485,7 @@ class DashboardTab(QWidget):
             from core.hanvon_client import HanvonClient
             from datetime import datetime
 
-            client = HanvonClient(ip, comm_key=commkey)
+            client = HanvonClient(ip, port=port, comm_key=commkey)
             client.connect()
 
             # 1. Mevcut saati sor
@@ -531,6 +539,7 @@ class DashboardTab(QWidget):
         self.device_form_group.setTitle(f"Cihazi Duzenle: {device.name}")
         self.device_name_input.setText(device.name)
         self.device_ip_input.setText(device.ip)
+        self.device_port_input.setValue(device.port or 9922)
         self.device_commkey_input.setText(device.comm_key or "")
 
         # delete_after_pull ayarını DB'den oku
@@ -546,6 +555,7 @@ class DashboardTab(QWidget):
         """Cihaz kaydet (Yeni = INSERT, Duzenle = UPDATE)."""
         name = self.device_name_input.text().strip()
         ip = self.device_ip_input.text().strip()
+        port = self.device_port_input.value()
         commkey = self.device_commkey_input.text().strip() or None
 
         if not name or not ip:
@@ -564,9 +574,10 @@ class DashboardTab(QWidget):
 
                 device.name = name
                 device.ip = ip
+                device.port = port
                 device.set_comm_key(commkey)
 
-                msg = f"\n[BASARILI] Cihaz güncellendi: {name} ({ip})"
+                msg = f"\n[BASARILI] Cihaz güncellendi: {name} ({ip}:{port})"
                 action = "güncellendi"
             else:
                 # INSERT
@@ -578,10 +589,11 @@ class DashboardTab(QWidget):
                 device = Device(
                     name=name,
                     ip=ip,
+                    port=port,
                     enabled=True
                 )
                 device.set_comm_key(commkey)
-                msg = f"\n[BASARILI] Cihaz eklendi: {name} ({ip})"
+                msg = f"\n[BASARILI] Cihaz eklendi: {name} ({ip}:{port})"
                 action = "eklendi"
 
             self.session.add(device)

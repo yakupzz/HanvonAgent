@@ -344,7 +344,7 @@ class DeviceTransferWorker(QThread):
 
             # Kaynak bağlantısı — offline ise fallback çalışacak
             try:
-                source_client = HanvonClient(source_device.ip, comm_key=source_device.comm_key)
+                source_client = HanvonClient(source_device.ip, port=source_device.port, comm_key=source_device.comm_key)
                 source_client.connect()
                 self.progress.emit(f"✓ Kaynak bağlandı: {source_device.ip}")
                 _audit(f"BAĞLANTI | src={source_device.ip} | OK")
@@ -356,7 +356,7 @@ class DeviceTransferWorker(QThread):
                 _audit(f"BAĞLANTI | src={source_device.ip} | HATA: {e} → DB fallback")
                 source_client = None
 
-            target_client = HanvonClient(target_device.ip, comm_key=target_device.comm_key)
+            target_client = HanvonClient(target_device.ip, port=target_device.port, comm_key=target_device.comm_key)
             target_client.connect()
             self.progress.emit(f"✓ Hedef bağlandı: {target_device.ip}\n")
             _audit(f"BAĞLANTI | dst={target_device.ip} | OK")

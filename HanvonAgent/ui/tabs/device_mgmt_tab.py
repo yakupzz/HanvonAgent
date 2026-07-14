@@ -493,7 +493,7 @@ class DeviceMgmtTab(QWidget):
         try:
             logger.info(f"[BAŞLAT] Tüm personelleri getir — Cihaz: {device.ip}")
 
-            client = HanvonClient(device.ip, comm_key=device.comm_key)
+            client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
             client.connect()
             logger.info(f"[OK] Cihaza bağlandı: {device.ip}")
 
@@ -756,7 +756,7 @@ Debug: Konsol çıktısını kontrol edin"""
                 try:
                     device = self.session.query(Device).filter_by(id=self.current_device_id).first()
                     if device:
-                        client = HanvonClient(device.ip, comm_key=device.comm_key)
+                        client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
                         client.connect()
 
                         result = client.delete_employee(str(emp_id))
@@ -970,7 +970,7 @@ Debug: Konsol çıktısını kontrol edin"""
         client = None
 
         try:
-            client = HanvonClient(device.ip, comm_key=device.comm_key)
+            client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
             client.connect()
             logger.info(f"[TOPLU] Cihaza bağlandı: {device.ip}")
 

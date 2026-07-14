@@ -95,7 +95,7 @@ def push_employee(
 
     try:
         if client is None:
-            client = HanvonClient(device.ip, comm_key=device.comm_key)
+            client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
             client.connect()
 
         # SetNameTable kullan (SetEmployee yerine)

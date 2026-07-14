@@ -14,6 +14,7 @@ class Device(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), index=True)
     ip = Column(String(50), unique=True, index=True, nullable=False)
+    port = Column(Integer, default=9922, nullable=False)  # TCP port (varsayılan 9922)
     comm_key_encrypted = Column(String(500), nullable=True)  # Encrypted CommKey
     enabled = Column(Boolean, default=True, index=True)
     last_connected = Column(DateTime, nullable=True)

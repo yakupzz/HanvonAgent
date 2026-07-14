@@ -41,6 +41,7 @@ class RecordService:
         """
         client = HanvonClient(
             device.ip,
+            port=device.port,
             comm_key=device.comm_key,
         )
 

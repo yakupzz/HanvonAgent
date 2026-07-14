@@ -30,15 +30,16 @@ class DeviceListFetchWorker(QThread):
     fetched = Signal(list)   # list[str]
     error = Signal(str)
 
-    def __init__(self, ip: str, comm_key, parent=None):
+    def __init__(self, ip: str, comm_key, port: int = HanvonClient.DEFAULT_PORT, parent=None):
         super().__init__(parent)
         self.ip = ip
         self.comm_key = comm_key
+        self.port = port
 
     def run(self):
         client = None
         try:
-            client = HanvonClient(self.ip, comm_key=self.comm_key)
+            client = HanvonClient(self.ip, port=self.port, comm_key=self.comm_key)
             client.connect()
             ids = client.get_employee_id()
             self.fetched.emit([str(i) for i in ids])
@@ -207,7 +208,7 @@ class DeviceTransferDialog(QDialog):
         self.transfer_btn.setEnabled(False)
         self.status_label.setText(f"⏳ {device.name} ({device.ip}) bağlanılıyor...")
 
-        self._fetch_worker = DeviceListFetchWorker(device.ip, device.comm_key)
+        self._fetch_worker = DeviceListFetchWorker(device.ip, device.comm_key, port=device.port)
         self._fetch_worker.fetched.connect(lambda ids: self._on_list_fetched(ids, source_id))
         self._fetch_worker.error.connect(self._on_fetch_error)
         self._fetch_worker.start()
