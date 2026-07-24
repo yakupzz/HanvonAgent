@@ -557,6 +557,7 @@ class DeviceMgmtTab(QWidget):
             updated_count = 0
             failed = 0
             failed_ids = []  # Başarısız ID'ler
+            name_changes = []  # (emp_id, old_name, new_name) — cihazda isim değişmiş
             chunk_size = 20
             start_time = time.time()
             processed_count = 0
@@ -606,6 +607,7 @@ class DeviceMgmtTab(QWidget):
                                     biometric_templates.extend(v)
 
                             if existing:
+                                old_name = existing.name
                                 existing.name = name
                                 existing.card_num = card
                                 existing.check_type = emp_data.get('check_type', 'face')
@@ -615,6 +617,16 @@ class DeviceMgmtTab(QWidget):
                                 existing.last_synced = datetime.utcnow()
                                 if biometric_templates:
                                     existing.face_data = biometric_templates
+                                # Bekleyen (pending) yeniden adlandırma ya cihazda
+                                # zaten uygulanmış (name == pending_name) ya da
+                                # cihazda isim başka bir yolla değişmiş (name != old_name)
+                                # — her iki durumda da eski pending artık geçersiz,
+                                # display_name'in taze cihaz ismini gizlemesini önle.
+                                if existing.pending_name and (name == existing.pending_name or name != old_name):
+                                    existing.pending_name = None
+                                    existing.sync_status = "ok"
+                                if old_name and name and old_name != name:
+                                    name_changes.append((int(emp_id), old_name, name))
                                 updated_count += 1
                             else:
                                 emp = Employee(
@@ -658,13 +670,23 @@ class DeviceMgmtTab(QWidget):
 
             result_text.append("\n" + "=" * 70)
             result_text.append("✅ TAMAMLANDI!")
-            result_text.append(f"✨ Yeni: {len(employees_to_add)} | 🔄 Güncellenen: {updated_count} | ❌ Başarısız: {failed} | ⏱️ {elapsed_total:.1f}s")
+            result_text.append(f"✨ Yeni: {len(employees_to_add)} | 🔄 Güncellenen: {updated_count} | 🔤 İsim değişti: {len(name_changes)} | ❌ Başarısız: {failed} | ⏱️ {elapsed_total:.1f}s")
 
             # Başarısız ID'ler varsa göster
             if failed_ids:
                 failed_str = ', '.join(map(str, sorted(failed_ids)))
                 result_text.append(f"\n❌ Başarısız ID'ler: {failed_str}")
                 logger.warning(f"[BAŞARISIZ] {len(failed_ids)} personel yüklenemedi: {failed_ids}")
+
+            # İsim değişikliği tespit edilenleri göster (cihaz = tek gerçek kaynak, DB güncellendi)
+            if name_changes:
+                result_text.append("\n" + "─" * 70)
+                result_text.append(f"⚠️  İSİM DEĞİŞİKLİĞİ TESPİT EDİLDİ: {len(name_changes)} personel")
+                result_text.append("   (Cihazdaki güncel isim uygulamaya yazıldı)")
+                result_text.append("")
+                for emp_id, old_name, new_name in sorted(name_changes):
+                    result_text.append(f"   ID {emp_id:>5}  {old_name} → {new_name}")
+                logger.warning("[İSİM DEĞİŞTİ] %s", name_changes)
 
             # DB'de var, cihazda yok kontrolü
             device_id_set = {str(i) for i in ids}

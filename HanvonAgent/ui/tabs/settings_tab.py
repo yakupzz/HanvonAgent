@@ -302,7 +302,7 @@ class SettingsTab(QWidget):
         top_h_layout.addWidget(QLabel("Günde çekme sıklığı:"))
         frequency = QSpinBox()
         frequency.setMinimum(1)
-        frequency.setMaximum(3)
+        frequency.setMaximum(6)
         frequency.setValue(2)
         frequency.setMinimumHeight(32)
         frequency.setMinimumWidth(60)
@@ -349,24 +349,31 @@ class SettingsTab(QWidget):
         times_container.setSpacing(8)
         times_container.setContentsMargins(0, 0, 0, 0)
 
-        # Saat 1, 2, 3 widgets
+        # Saat 1-6 widgets — aynı satırda 2'şer, toplam 3 satır
         time_widgets = []
-        for i in range(1, 4):
-            saat_h_layout = QHBoxLayout()
-            saat_h_layout.addWidget(QLabel(f"  └─ Saat {i}:"))
-            time_input = QTimeEdit()
-            default_hours = [10, 14, 18]
-            time_input.setTime(QTime(default_hours[i-1], 0))
-            time_input.setMinimumHeight(32)
-            saat_h_layout.addWidget(time_input)
-            saat_h_layout.addStretch()
+        default_hours = [8, 10, 12, 14, 16, 18]
+        for row_idx in range(3):
+            row_layout = QHBoxLayout()
+            for col in range(2):
+                i = row_idx * 2 + col + 1
 
-            # Widget'ı container'a ekle
-            saat_widget = QWidget()
-            saat_widget.setLayout(saat_h_layout)
-            times_container.addWidget(saat_widget)
-            time_widgets.append((saat_widget, time_input))
-            self.device_schedules[f"{device.id}_{i}"] = time_input
+                entry_h_layout = QHBoxLayout()
+                entry_h_layout.addWidget(QLabel(f"  └─ Saat {i}:"))
+                time_input = QTimeEdit()
+                time_input.setTime(QTime(default_hours[i - 1], 0))
+                time_input.setMinimumHeight(32)
+                entry_h_layout.addWidget(time_input)
+
+                entry_widget = QWidget()
+                entry_widget.setLayout(entry_h_layout)
+                row_layout.addWidget(entry_widget)
+                time_widgets.append((entry_widget, time_input))
+                self.device_schedules[f"{device.id}_{i}"] = time_input
+
+            row_layout.addStretch()
+            row_widget = QWidget()
+            row_widget.setLayout(row_layout)
+            times_container.addWidget(row_widget)
 
         # Dinamik göster/gizle
         def update_time_visibility():
@@ -392,7 +399,7 @@ class SettingsTab(QWidget):
                 if not setting:
                     continue
 
-                # Format: "frequency|saat1,saat2,saat3|durum"
+                # Format: "frequency|saat1,saat2,...,saat6|durum"
                 parts = setting.value.split("|")
                 if len(parts) < 3:
                     continue
@@ -439,12 +446,12 @@ class SettingsTab(QWidget):
 
                 # Setting tablosuna kaydet (key: device_{id}_schedule)
                 times = []
-                for i in range(1, 4):
+                for i in range(1, 7):
                     time_widget = self.device_schedules.get(f"{dev_id}_{i}")
                     if time_widget:
                         times.append(time_widget.time().toString("HH:mm"))
 
-                # Format: "frequency|saat1,saat2|durum" (durum: 1=açık, 0=kapalı)
+                # Format: "frequency|saat1,saat2,...,saat6|durum" (durum: 1=açık, 0=kapalı)
                 status = "1" if is_open else "0"
                 schedule_data = f"{frequency_val}|{','.join(times[:frequency_val])}|{status}"
 

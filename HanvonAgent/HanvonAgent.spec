@@ -6,7 +6,6 @@ a = Analysis(
     binaries=[],
     datas=[
         ('D:\\Projeler\\F710\\HanvonAgent\\hanvon.ico', 'HanvonAgent'),
-        ('D:\\Projeler\\F710\\HanvonAgent\\dist\\data\\hanvon_agent.db', '.'),
     ],
     hiddenimports=[
         'sqlalchemy',

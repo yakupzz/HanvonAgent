@@ -254,3 +254,107 @@ class TestDeleteFlow:
         assert mock_q.call_count == 2  # çift onay soruldu
         remaining = tab.session.query(Employee).filter_by(id=emp.id).first()
         assert remaining is None
+
+
+class TestFetchAllEmployeesFromDevice:
+    """'Cihazdan Personelleri Getir' — display_name eski pending'i gizlememeli."""
+
+    def _run_fetch(self, tab, device_id, get_employee_return):
+        from PySide6.QtWidgets import QDialog
+
+        tab.device_combo.addItem("test", device_id)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+
+        mock_client = MagicMock()
+        mock_client.get_employee_id.return_value = ["100"]
+        mock_client.get_employee.return_value = get_employee_return
+
+        with patch("ui.tabs.device_mgmt_tab.HanvonClient", return_value=mock_client), \
+                patch.object(QDialog, "exec", lambda self: None):
+            tab._fetch_all_employees()
+
+    def test_stale_pending_name_cleared_when_device_name_differs(self, tab, session, device):
+        """Cihazda isim doğrudan değiştirilmişse (bizim pending'imizden bağımsız),
+        taze çekilen isim gösterilmeli — eski pending_name display_name'i
+        gizlemeye devam etmemeli."""
+        emp = Employee(
+            employee_device_id=100, name="Eski Isim", pending_name="Bekleyen Isim",
+            card_num="0X100", check_type="face", sync_status="yeni",
+            device_id=device.id,
+        )
+        session.add(emp)
+        session.commit()
+
+        self._run_fetch(tab, device.id, {
+            "result": "success", "name": "Cihazdaki Guncel Isim", "card_num": "0X100",
+        })
+
+        session.refresh(emp)
+        assert emp.name == "Cihazdaki Guncel Isim"
+        assert emp.pending_name is None
+        assert emp.sync_status == "ok"
+        assert emp.display_name == "Cihazdaki Guncel Isim"
+
+    def test_pending_name_kept_when_device_unchanged(self, tab, session, device):
+        """Cihaz hala eski ismi döndürüyorsa (push henüz yapılmadıysa), bekleyen
+        yeniden adlandırma korunmalı."""
+        emp = Employee(
+            employee_device_id=100, name="Eski Isim", pending_name="Bekleyen Isim",
+            card_num="0X100", check_type="face", sync_status="yeni",
+            device_id=device.id,
+        )
+        session.add(emp)
+        session.commit()
+
+        self._run_fetch(tab, device.id, {
+            "result": "success", "name": "Eski Isim", "card_num": "0X100",
+        })
+
+        session.refresh(emp)
+        assert emp.name == "Eski Isim"
+        assert emp.pending_name == "Bekleyen Isim"
+        assert emp.sync_status == "yeni"
+        assert emp.display_name == "Bekleyen Isim"
+
+    def test_name_change_updates_db_and_warns(self, tab, session, device):
+        """Cihazdaki isim DB'dekinden farklıysa: DB güncellenmeli VE
+        logger.warning ile [İSİM DEĞİŞTİ] uyarısı verilmeli."""
+        emp = Employee(
+            employee_device_id=100, name="Eski Isim",
+            card_num="0X100", check_type="face", sync_status="ok",
+            device_id=device.id,
+        )
+        session.add(emp)
+        session.commit()
+
+        with patch("ui.tabs.device_mgmt_tab.logger.warning") as mock_warn:
+            self._run_fetch(tab, device.id, {
+                "result": "success", "name": "Yeni Isim", "card_num": "0X100",
+            })
+
+        session.refresh(emp)
+        assert emp.name == "Yeni Isim"
+
+        warned_name_change = any(
+            call.args and call.args[0] == "[İSİM DEĞİŞTİ] %s"
+            for call in mock_warn.call_args_list
+        )
+        assert warned_name_change
+
+    def test_no_name_change_no_warning_state(self, tab, session, device):
+        """İsim aynıysa DB değişmemeli, isim değişikliği listesine girmemeli."""
+        emp = Employee(
+            employee_device_id=100, name="Ayni Isim",
+            card_num="0X100", check_type="face", sync_status="ok",
+            device_id=device.id,
+        )
+        session.add(emp)
+        session.commit()
+
+        self._run_fetch(tab, device.id, {
+            "result": "success", "name": "Ayni Isim", "card_num": "0X100",
+        })
+
+        session.refresh(emp)
+        assert emp.name == "Ayni Isim"
+        assert emp.sync_status == "ok"
