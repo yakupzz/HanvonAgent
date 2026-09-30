@@ -21,9 +21,10 @@ from models import Device, Employee
 from ui.tabs.device_mgmt_tab import DeviceMgmtTab, SYNC_OK_COLOR, SYNC_PENDING_COLOR
 
 
-# SYNC sütun index'i (7 sütunlu tabloda)
+# Sütun index'leri (8 sütunlu tabloda)
 SYNC_COL = 5
-ACTION_COL = 6
+DEVICES_COL = 6
+ACTION_COL = 7
 NAME_COL = 2
 
 
@@ -87,8 +88,12 @@ def _load(tab, employees, device):
 
 
 class TestTableStructure:
-    def test_has_seven_columns(self, tab):
-        assert tab.employee_table.columnCount() == 7
+    def test_has_eight_columns(self, tab):
+        assert tab.employee_table.columnCount() == 8
+
+    def test_devices_header_present(self, tab):
+        header = tab.employee_table.horizontalHeaderItem(DEVICES_COL).text()
+        assert header.startswith("Cihazlar")
 
     def test_sync_header_present(self, tab):
         headers = [
@@ -358,3 +363,124 @@ class TestFetchAllEmployeesFromDevice:
         session.refresh(emp)
         assert emp.name == "Ayni Isim"
         assert emp.sync_status == "ok"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# "Cihazlar" sütunu — personel (employee_device_id) hangi cihazlarda kayıtlı
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def two_devices(session, device):
+    """device = 'Cihaz' (218), ikinci = 'Yonetim' (219).
+    100 → iki cihazda da, 200 → yalnız ilk cihazda."""
+    second = Device(name="Yonetim", ip="172.16.1.219", enabled=True)
+    session.add(second)
+    session.commit()
+    emps = [
+        Employee(employee_device_id=100, name="Ahmet", device_id=device.id),
+        Employee(employee_device_id=200, name="Mehmet", device_id=device.id),
+        Employee(employee_device_id=100, name="Ahmet", device_id=second.id),
+    ]
+    session.add_all(emps)
+    session.commit()
+    return device, second, emps[:2]
+
+
+def _row_of(tab, emp_device_id):
+    from ui.tabs.device_mgmt_tab import COL_ID
+    for r in range(tab.employee_table.rowCount()):
+        if tab.employee_table.item(r, COL_ID).text() == str(emp_device_id):
+            return r
+    raise AssertionError(f"ID {emp_device_id} tabloda yok")
+
+
+class TestDevicesColumn:
+    def test_lists_all_devices_holding_employee(self, tab, two_devices):
+        dev1, _, emps = two_devices
+        _load(tab, emps, dev1)
+        text = tab.employee_table.item(_row_of(tab, 100), DEVICES_COL).text()
+        assert text == "Cihaz, Yonetim"
+
+    def test_employee_on_single_device(self, tab, two_devices):
+        dev1, _, emps = two_devices
+        _load(tab, emps, dev1)
+        item = tab.employee_table.item(_row_of(tab, 200), DEVICES_COL)
+        assert item.text() == "Cihaz"
+        assert "Yonetim" in item.toolTip()  # eksik olduğu cihaz tooltip'te
+
+    def test_devices_cell_not_editable(self, tab, two_devices):
+        dev1, _, emps = two_devices
+        _load(tab, emps, dev1)
+        item = tab.employee_table.item(0, DEVICES_COL)
+        assert not (item.flags() & Qt.ItemIsEditable)
+
+    def test_missing_filter_shows_only_incomplete(self, tab, two_devices):
+        dev1, _, emps = two_devices
+        tab.current_device_id = dev1.id
+        tab.current_employees = emps
+        idx = tab.filter_devices.findData("missing")
+        tab.filter_devices.setCurrentIndex(idx)
+        assert tab.employee_table.rowCount() == 1
+        assert tab.employee_table.item(0, DEVICES_COL).text() == "Cihaz"
+
+    def test_sort_by_devices_column(self, tab, two_devices):
+        dev1, _, emps = two_devices
+        _load(tab, emps, dev1)
+        tab._on_header_click(DEVICES_COL)  # artan: az cihazlı önce
+        assert tab.employee_table.item(0, DEVICES_COL).text() == "Cihaz"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Personelleri Getir → satır bazında ✅ güncellendi / ❌ başarısız ikonu
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _status_icon(tab, row):
+    from PySide6.QtWidgets import QLabel
+    widget = tab.employee_table.cellWidget(row, ACTION_COL)
+    label = widget.findChild(QLabel, "fetchStatusIcon")
+    return label.text() if label else None
+
+
+class TestFetchStatusIcons:
+    def _run_fetch(self, tab, device_id, ids, get_employee):
+        from PySide6.QtWidgets import QDialog
+        tab.device_combo.addItem("test", device_id)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+        mock_client = MagicMock()
+        mock_client.get_employee_id.return_value = ids
+        mock_client.get_employee.side_effect = get_employee
+        with patch("ui.tabs.device_mgmt_tab.HanvonClient", return_value=mock_client),                 patch.object(QDialog, "exec", lambda self: None):
+            tab._fetch_all_employees()
+
+    def test_no_icon_before_fetch(self, tab, employees, device):
+        _load(tab, employees, device)
+        assert _status_icon(tab, 0) is None
+
+    def test_updated_and_failed_icons(self, tab, session, employees, device):
+        def get_employee(emp_id):
+            if emp_id == "100":
+                return {"result": "success", "name": "Ahmet", "card_num": "0X100"}
+            raise TimeoutError("cihaz yanıt vermedi")
+
+        self._run_fetch(tab, device.id, ["100", "200"], get_employee)
+        assert _status_icon(tab, _row_of(tab, 100)) == "✅"
+        assert _status_icon(tab, _row_of(tab, 200)) == "❌"
+
+    def test_non_success_result_counts_as_failed(self, tab, session, employees, device):
+        def get_employee(emp_id):
+            return {"result": "fail"}
+
+        self._run_fetch(tab, device.id, ["100"], get_employee)
+        assert _status_icon(tab, _row_of(tab, 100)) == "❌"
+
+    def test_new_employee_gets_success_icon(self, tab, session, device):
+        self._run_fetch(tab, device.id, ["300"],
+                        lambda _id: {"result": "success", "name": "Yeni", "card_num": ""})
+        assert _status_icon(tab, _row_of(tab, 300)) == "✅"
+
+    def test_status_cleared_on_device_change(self, tab, session, employees, device):
+        self._run_fetch(tab, device.id, ["100"],
+                        lambda _id: {"result": "success", "name": "Ahmet", "card_num": ""})
+        tab.device_combo.setCurrentIndex(0)  # "Cihaz Seçiniz"
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+        assert _status_icon(tab, _row_of(tab, 100)) is None

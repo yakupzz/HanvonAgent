@@ -53,7 +53,22 @@ COL_NAME = 2
 COL_CARD = 3
 COL_TYPE = 4
 COL_SYNC = 5
-COL_ACTIONS = 6
+COL_DEVICES = 6
+COL_ACTIONS = 7
+
+TABLE_HEADERS = [
+    "#", "ID", "İsim Bilgisi", "Kart No", "Tür", "sync", "Cihazlar", "İşlemler"
+]
+
+# Cihazlar sütunu — personel tüm cihazlarda değilse vurgulanır
+DEVICES_MISSING_COLOR = QColor(255, 224, 178)  # açık turuncu
+
+# Personelleri Getir sonrası satır durum ikonları (employee_device_id → durum)
+FETCH_STATUS_ICONS = {
+    "updated": ("✅", "Personelleri Getir: cihazdan güncellendi"),
+    "new": ("✅", "Personelleri Getir: cihazdan yeni eklendi"),
+    "failed": ("❌", "Personelleri Getir: cihazdan okunamadı (başarısız)"),
+}
 
 
 class DeviceMgmtTab(QWidget):
@@ -65,6 +80,8 @@ class DeviceMgmtTab(QWidget):
         self.current_employees = []
         self.current_device_id = None
         self._active_workers = []  # Çalışan worker referanslarını tut (GC önle)
+        # Son "Personelleri Getir" sonucu — cihaz değişince temizlenir
+        self.fetch_status = {}  # employee_device_id → "updated" | "new" | "failed"
 
         # Sorting state
         self.sort_column = None  # Hangi sütun sıralanıyor
@@ -139,6 +156,13 @@ class DeviceMgmtTab(QWidget):
         self.filter_sync.setMaximumWidth(100)
         self.filter_sync.currentIndexChanged.connect(self._filter_employees)
 
+        self.filter_devices = QComboBox()
+        self.filter_devices.addItem("Tümü", None)
+        self.filter_devices.addItem("Eksik olanlar", "missing")  # tüm cihazlarda olmayan
+        self.filter_devices.setMaximumWidth(120)
+        self.filter_devices.setToolTip("Tüm cihazlarda kayıtlı olmayan personelleri göster")
+        self.filter_devices.currentIndexChanged.connect(self._filter_employees)
+
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(QLabel("🔍 Filtrele:"))
         filter_layout.addWidget(QLabel("ID:"))
@@ -151,6 +175,8 @@ class DeviceMgmtTab(QWidget):
         filter_layout.addWidget(self.filter_type)
         filter_layout.addWidget(QLabel("Sync:"))
         filter_layout.addWidget(self.filter_sync)
+        filter_layout.addWidget(QLabel("Cihazlar:"))
+        filter_layout.addWidget(self.filter_devices)
         filter_layout.addStretch()
 
         self.bulk_send_btn = QPushButton("📤 Toplu Gönder")
@@ -168,17 +194,16 @@ class DeviceMgmtTab(QWidget):
         emp_layout.addLayout(filter_layout)
 
         self.employee_table = QTableWidget()
-        self.employee_table.setColumnCount(7)
-        self.employee_table.setHorizontalHeaderLabels([
-            "#", "ID", "İsim Bilgisi", "Kart No", "Tür", "sync", "İşlemler"
-        ])
+        self.employee_table.setColumnCount(len(TABLE_HEADERS))
+        self.employee_table.setHorizontalHeaderLabels(TABLE_HEADERS)
         self.employee_table.setColumnWidth(COL_NUM, 40)
         self.employee_table.setColumnWidth(COL_ID, 60)
         self.employee_table.setColumnWidth(COL_NAME, 220)
         self.employee_table.setColumnWidth(COL_CARD, 120)
         self.employee_table.setColumnWidth(COL_TYPE, 100)
         self.employee_table.setColumnWidth(COL_SYNC, 80)
-        self.employee_table.setColumnWidth(COL_ACTIONS, 130)
+        self.employee_table.setColumnWidth(COL_DEVICES, 180)
+        self.employee_table.setColumnWidth(COL_ACTIONS, 160)
 
         # Tablo stili (records_tab paleti ile uyumlu)
         self.employee_table.setStyleSheet("""
@@ -238,6 +263,7 @@ class DeviceMgmtTab(QWidget):
         enabled = device_id is not None
 
         self.fetch_all_employees_btn.setEnabled(enabled)
+        self.fetch_status = {}  # önceki cihazın getir sonucu bu cihaza ait değil
 
         if device_id:
             self._load_employees(device_id)
@@ -257,6 +283,7 @@ class DeviceMgmtTab(QWidget):
         self.filter_card.clear()
         self.filter_type.clear()
         self.filter_sync.setCurrentIndex(0)  # "Tümü"
+        self.filter_devices.setCurrentIndex(0)  # "Tümü"
         self._filter_employees()
 
     def _filter_employees(self):
@@ -271,6 +298,9 @@ class DeviceMgmtTab(QWidget):
         filter_card = self.filter_card.text().lower().strip()
         filter_type = self.filter_type.text().lower().strip()
         filter_sync = self.filter_sync.currentData()  # None veya "yeni" veya "ok"
+        filter_devices = self.filter_devices.currentData()  # None veya "missing"
+
+        presence, all_device_names = self._device_presence()
 
         # Tüm kriterlere göre filtrele (AND logic)
         filtered = []
@@ -298,11 +328,19 @@ class DeviceMgmtTab(QWidget):
             if filter_sync is not None and emp_sync_status != filter_sync:
                 continue
 
+            # Cihazlar kontrolü — yalnız tüm cihazlarda olmayanlar
+            if filter_devices == "missing":
+                on_devices = presence.get(emp.employee_device_id, [])
+                if len(on_devices) >= len(all_device_names):
+                    continue
+
             filtered.append(emp)
 
         # Sıralama uygula
         if self.sort_column is not None:
-            filtered = self._sort_employees(filtered, self.sort_column, self.sort_ascending)
+            filtered = self._sort_employees(
+                filtered, self.sort_column, self.sort_ascending, presence
+            )
 
         self.employee_table.blockSignals(True)
         try:
@@ -350,14 +388,30 @@ class DeviceMgmtTab(QWidget):
                 sync_item.setBackground(SYNC_PENDING_COLOR if is_pending else SYNC_OK_COLOR)
                 self.employee_table.setItem(row, COL_SYNC, sync_item)
 
+                # Cihazlar (salt-okunur) — bu ID hangi cihazlarda kayıtlı
+                on_devices = presence.get(emp.employee_device_id, [])
+                missing = [n for n in all_device_names if n not in on_devices]
+                devices_item = QTableWidgetItem(", ".join(on_devices) or "—")
+                devices_item.setFlags(devices_item.flags() & ~Qt.ItemIsEditable)
+                if missing:
+                    devices_item.setToolTip("Eksik olduğu cihazlar: " + ", ".join(missing))
+                else:
+                    devices_item.setToolTip("Tüm cihazlarda kayıtlı")
+                self.employee_table.setItem(row, COL_DEVICES, devices_item)
+
                 # Satır arka plan rengi (SYNC hariç — onun kendi rengi var)
-                for col in (COL_NUM, COL_ID, COL_NAME, COL_CARD, COL_TYPE):
+                for col in (COL_NUM, COL_ID, COL_NAME, COL_CARD, COL_TYPE, COL_DEVICES):
                     item = self.employee_table.item(row, col)
                     if item:
                         item.setBackground(row_color)
+                if missing:
+                    devices_item.setBackground(DEVICES_MISSING_COLOR)
 
                 # İşlem butonları
-                self._build_action_widget(row, emp, row_color, is_pending)
+                self._build_action_widget(
+                    row, emp, row_color, is_pending,
+                    self.fetch_status.get(emp.employee_device_id),
+                )
         finally:
             self.employee_table.blockSignals(False)
 
@@ -370,11 +424,41 @@ class DeviceMgmtTab(QWidget):
         self.bulk_send_btn.setEnabled(has_pending)
         self.export_btn.setEnabled(bool(self.current_employees))
 
-    def _build_action_widget(self, row, emp, row_color, is_pending):
-        """Bir satırın işlem butonlarını (✎ düzenle, 📤 gönder, ✕ sil) oluştur."""
+    def _device_presence(self):
+        """Her employee_device_id'nin kayıtlı olduğu cihaz isimleri.
+
+        Döner: ({employee_device_id: [cihaz adı, ...] (sıralı)}, [tüm cihaz adları])
+        DB'deki son "Personelleri Getir" durumunu yansıtır.
+        """
+        devices = self.session.query(Device).all()
+        names = {d.id: (d.name or d.ip) for d in devices}
+        presence = {}
+        rows = self.session.query(Employee.employee_device_id, Employee.device_id).all()
+        for emp_device_id, device_id in rows:
+            name = names.get(device_id)
+            if name is None:
+                continue
+            presence.setdefault(emp_device_id, set()).add(name)
+        return (
+            {k: sorted(v, key=str.lower) for k, v in presence.items()},
+            sorted(set(names.values()), key=str.lower),
+        )
+
+    def _build_action_widget(self, row, emp, row_color, is_pending, fetch_status=None):
+        """Bir satırın işlem butonlarını (✎ düzenle, 📤 gönder, ✕ sil) ve varsa
+        son Personelleri Getir durum ikonunu (✅ / ❌) oluştur."""
         action_layout = QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(4)
+
+        if fetch_status in FETCH_STATUS_ICONS:
+            icon, tooltip = FETCH_STATUS_ICONS[fetch_status]
+            status_label = QLabel(icon)
+            status_label.setObjectName("fetchStatusIcon")
+            status_label.setToolTip(tooltip)
+            status_label.setFixedWidth(24)
+            status_label.setAlignment(Qt.AlignCenter)
+            action_layout.addWidget(status_label)
 
         edit_btn = QPushButton("✎")
         edit_btn.setMaximumWidth(32)
@@ -558,6 +642,7 @@ class DeviceMgmtTab(QWidget):
             failed = 0
             failed_ids = []  # Başarısız ID'ler
             name_changes = []  # (emp_id, old_name, new_name) — cihazda isim değişmiş
+            fetch_status = {}  # employee_device_id → "updated" | "new" | "failed"
             chunk_size = 20
             start_time = time.time()
             processed_count = 0
@@ -628,6 +713,7 @@ class DeviceMgmtTab(QWidget):
                                 if old_name and name and old_name != name:
                                     name_changes.append((int(emp_id), old_name, name))
                                 updated_count += 1
+                                fetch_status[int(emp_id)] = "updated"
                             else:
                                 emp = Employee(
                                     employee_device_id=int(emp_id),
@@ -642,10 +728,18 @@ class DeviceMgmtTab(QWidget):
                                 if biometric_templates:
                                     emp.face_data = biometric_templates
                                 employees_to_add.append(emp)
+                                fetch_status[int(emp_id)] = "new"
                             successful_in_chunk += 1
+                        else:
+                            # result != success — cihaz personeli döndürmedi
+                            failed += 1
+                            failed_ids.append(int(emp_id))
+                            fetch_status[int(emp_id)] = "failed"
+                            logger.debug(f"GetEmployee({emp_id}) başarısız yanıt: {emp_data}")
                     except Exception as e:
                         failed += 1
                         failed_ids.append(int(emp_id))
+                        fetch_status[int(emp_id)] = "failed"
                         logger.debug(f"GetEmployee({emp_id}) başarısız: {str(e)}")
                         continue
 
@@ -716,6 +810,7 @@ class DeviceMgmtTab(QWidget):
 
             close_btn.setEnabled(True)
             result_dialog.exec()
+            self.fetch_status = fetch_status
             self._load_employees(device_id)
 
         except Exception as e:
@@ -884,7 +979,7 @@ Debug: Konsol çıktısını kontrol edin"""
         except Exception as e:
             logger.error(f"[AUDIT] Log yazma hatası: {str(e)}")
 
-    def _sort_employees(self, employees, col, ascending):
+    def _sort_employees(self, employees, col, ascending, presence=None):
         """Personel listesini verilen sütuna göre sırala."""
         if col == COL_ID:
             return sorted(employees, key=lambda e: int(e.employee_device_id or 0), reverse=not ascending)
@@ -897,6 +992,14 @@ Debug: Konsol çıktısını kontrol edin"""
         elif col == COL_SYNC:
             # Yeni (pending) sütunu — "yeni" önce, "ok" sonra
             return sorted(employees, key=lambda e: e.sync_status == "ok", reverse=not ascending)
+        elif col == COL_DEVICES:
+            # Az cihazda olan önce (eksikler üstte), sonra isim listesi
+            presence = presence or {}
+
+            def devices_key(e):
+                names = presence.get(e.employee_device_id, [])
+                return (len(names), ", ".join(names).lower())
+            return sorted(employees, key=devices_key, reverse=not ascending)
         else:
             return employees
 
@@ -922,11 +1025,8 @@ Debug: Konsol çıktısını kontrol edin"""
     def _update_header_indicator(self):
         """Header'da sıralama yönünü göster (▲▼)."""
         header = self.employee_table.horizontalHeader()
-        headers = [
-            "#", "ID", "İsim Bilgisi", "Kart No", "Tür", "sync", "İşlemler"
-        ]
 
-        for col, title in enumerate(headers):
+        for col, title in enumerate(TABLE_HEADERS):
             if col == self.sort_column:
                 arrow = "▲" if self.sort_ascending else "▼"
                 header.model().setHeaderData(col, Qt.Horizontal, f"{title} {arrow}")

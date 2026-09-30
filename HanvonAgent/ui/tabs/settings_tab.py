@@ -10,6 +10,12 @@ from PySide6.QtCore import Qt, QTime, Signal
 from PySide6.QtGui import QFont
 from models import Device, Setting, get_session
 
+# Cihaz başına günlük otomatik çekme üst sınırı (saat girişleri 2'şer sütunda dizilir)
+MAX_DAILY_PULLS = 10
+TIME_COLUMNS = 2
+# İlk 6 saat önceki sürümle aynı; 7-10 akşam/gece slotları
+DEFAULT_PULL_HOURS = [8, 10, 12, 14, 16, 18, 20, 22, 0, 6]
+
 
 class SettingsTab(QWidget):
     """Ayarlar sekmesi — Modern Tab UI."""
@@ -302,7 +308,7 @@ class SettingsTab(QWidget):
         top_h_layout.addWidget(QLabel("Günde çekme sıklığı:"))
         frequency = QSpinBox()
         frequency.setMinimum(1)
-        frequency.setMaximum(6)
+        frequency.setMaximum(MAX_DAILY_PULLS)
         frequency.setValue(2)
         frequency.setMinimumHeight(32)
         frequency.setMinimumWidth(60)
@@ -349,18 +355,20 @@ class SettingsTab(QWidget):
         times_container.setSpacing(8)
         times_container.setContentsMargins(0, 0, 0, 0)
 
-        # Saat 1-6 widgets — aynı satırda 2'şer, toplam 3 satır
+        # Saat 1-MAX_DAILY_PULLS widgets — aynı satırda TIME_COLUMNS adet
         time_widgets = []
-        default_hours = [8, 10, 12, 14, 16, 18]
-        for row_idx in range(3):
+        row_count = (MAX_DAILY_PULLS + TIME_COLUMNS - 1) // TIME_COLUMNS
+        for row_idx in range(row_count):
             row_layout = QHBoxLayout()
-            for col in range(2):
-                i = row_idx * 2 + col + 1
+            for col in range(TIME_COLUMNS):
+                i = row_idx * TIME_COLUMNS + col + 1
+                if i > MAX_DAILY_PULLS:
+                    break
 
                 entry_h_layout = QHBoxLayout()
                 entry_h_layout.addWidget(QLabel(f"  └─ Saat {i}:"))
                 time_input = QTimeEdit()
-                time_input.setTime(QTime(default_hours[i - 1], 0))
+                time_input.setTime(QTime(DEFAULT_PULL_HOURS[i - 1], 0))
                 time_input.setMinimumHeight(32)
                 entry_h_layout.addWidget(time_input)
 
@@ -399,7 +407,7 @@ class SettingsTab(QWidget):
                 if not setting:
                     continue
 
-                # Format: "frequency|saat1,saat2,...,saat6|durum"
+                # Format: "frequency|saat1,saat2,...,saatN|durum"
                 parts = setting.value.split("|")
                 if len(parts) < 3:
                     continue
@@ -446,12 +454,12 @@ class SettingsTab(QWidget):
 
                 # Setting tablosuna kaydet (key: device_{id}_schedule)
                 times = []
-                for i in range(1, 7):
+                for i in range(1, MAX_DAILY_PULLS + 1):
                     time_widget = self.device_schedules.get(f"{dev_id}_{i}")
                     if time_widget:
                         times.append(time_widget.time().toString("HH:mm"))
 
-                # Format: "frequency|saat1,saat2,...,saat6|durum" (durum: 1=açık, 0=kapalı)
+                # Format: "frequency|saat1,saat2,...,saatN|durum" (durum: 1=açık, 0=kapalı)
                 status = "1" if is_open else "0"
                 schedule_data = f"{frequency_val}|{','.join(times[:frequency_val])}|{status}"
 
