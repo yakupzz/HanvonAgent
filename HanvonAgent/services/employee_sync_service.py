@@ -15,7 +15,7 @@ HanvonClient dışarıdan enjekte edilebilir (test için mock'lanır).
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -104,6 +104,38 @@ def propagate_pending(session: Session, employee: Employee) -> List[Employee]:
     for sibling in siblings:
         mark_pending(session, sibling, employee.pending_name)
     return siblings
+
+
+def normalize_name(name: Optional[str]) -> str:
+    """Cihazlar arası karşılaştırma anahtarı.
+
+    Uygulama cihaza isimleri ASCII'ye çevirerek yazdığı için Türkçe harf,
+    büyük/küçük harf ve fazla boşluk farkı "farklı isim" sayılmaz.
+    """
+    ascii_name = HanvonClient._ascii_name(name or "")
+    return " ".join(ascii_name.split()).casefold()
+
+
+def cross_device_names(session: Session) -> Dict[int, Dict[int, str]]:
+    """{employee_device_id: {device_id: name}} — her ID'nin cihaz bazında kayıtlı ismi."""
+    result: Dict[int, Dict[int, str]] = {}
+    rows = session.query(Employee.employee_device_id, Employee.device_id, Employee.name).all()
+    for emp_device_id, device_id, name in rows:
+        result.setdefault(emp_device_id, {})[device_id] = name or ""
+    return result
+
+
+def differing_names(employee: Employee, names_by_device: Dict[int, str]) -> Dict[int, str]:
+    """Bu personelin ID'si için İSMİ FARKLI olan diğer cihazlar: {device_id: name}.
+
+    Karşılaştırma cihazdan gelen `name` ile yapılır (bekleyen düzenleme hariç).
+    """
+    own = normalize_name(employee.name)
+    return {
+        device_id: name
+        for device_id, name in names_by_device.items()
+        if device_id != employee.device_id and normalize_name(name) != own
+    }
 
 
 def push_employee(

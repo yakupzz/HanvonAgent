@@ -750,3 +750,81 @@ class TestSendSuccessMessage:
         info.assert_called_once()
         text = info.call_args.args[2]
         assert "Cihaz (172.16.1.218)" in text and "200" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# İsim farkı rozeti — aynı ID başka cihazda farklı isimle kayıtlı
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def name_mismatch(session, device):
+    """ID 3: Cihaz'da YELDA, Yonetim'de BENSU. ID 4: iki cihazda da aynı."""
+    dev2 = Device(name="Yonetim", ip="172.16.1.219", enabled=True)
+    session.add(dev2)
+    session.commit()
+    here = [
+        Employee(employee_device_id=3, name="YELDA", device_id=device.id),
+        Employee(employee_device_id=4, name="GÖRKEM SERBES", device_id=device.id),
+    ]
+    session.add_all(here + [
+        Employee(employee_device_id=3, name="BENSU", device_id=dev2.id),
+        Employee(employee_device_id=4, name="GORKEM  serbes", device_id=dev2.id),
+    ])
+    session.commit()
+    return here, dev2
+
+
+def _badge(tab, emp_device_id):
+    from ui.tabs.device_mgmt_tab import NAME_BADGE_ROLE
+    return tab.employee_table.item(_row_of(tab, emp_device_id), NAME_COL).data(NAME_BADGE_ROLE)
+
+
+class TestNameMismatchBadge:
+    def test_badge_shows_other_device_name(self, tab, device, name_mismatch):
+        here, _ = name_mismatch
+        _load(tab, here, device)
+        assert _badge(tab, 3) == "≠ Yonetim: BENSU"
+        tip = tab.employee_table.item(_row_of(tab, 3), NAME_COL).toolTip()
+        assert "Yonetim" in tip and "BENSU" in tip
+
+    def test_badge_is_not_part_of_editable_text(self, tab, device, name_mismatch):
+        here, _ = name_mismatch
+        _load(tab, here, device)
+        assert tab.employee_table.item(_row_of(tab, 3), NAME_COL).text() == "YELDA"
+
+    def test_no_badge_for_turkish_case_space_only_difference(self, tab, device, name_mismatch):
+        here, _ = name_mismatch
+        _load(tab, here, device)
+        assert not _badge(tab, 4)
+
+    def test_no_badge_when_only_on_one_device(self, tab, employees, device):
+        _load(tab, employees, device)
+        assert not _badge(tab, 100)
+
+    def test_several_devices_differ(self, tab, session, device, name_mismatch):
+        here, _ = name_mismatch
+        dev3 = Device(name="Depo", ip="172.16.1.220", enabled=True)
+        session.add(dev3)
+        session.commit()
+        session.add(Employee(employee_device_id=3, name="AYSE", device_id=dev3.id))
+        session.commit()
+        _load(tab, here, device)
+        assert _badge(tab, 3) == "≠ 2 cihazda farklı"
+        tip = tab.employee_table.item(_row_of(tab, 3), NAME_COL).toolTip()
+        assert "BENSU" in tip and "AYSE" in tip
+
+    def test_filter_name_differs(self, tab, device, name_mismatch):
+        here, _ = name_mismatch
+        tab.current_device_id = device.id
+        tab.current_employees = here
+        tab.filter_devices.setCurrentIndex(tab.filter_devices.findData("name_diff"))
+        assert tab.employee_table.rowCount() == 1
+        assert tab.employee_table.item(0, NAME_COL).text() == "YELDA"
+
+    def test_badge_delegate_paints_without_error(self, tab, device, name_mismatch):
+        from ui.tabs.device_mgmt_tab import NameBadgeDelegate
+        here, _ = name_mismatch
+        _load(tab, here, device)
+        assert isinstance(tab.employee_table.itemDelegateForColumn(NAME_COL), NameBadgeDelegate)
+        tab.resize(1200, 400)
+        assert not tab.employee_table.grab().isNull()  # rozetli satırlar gerçekten çizilir

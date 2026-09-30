@@ -3,7 +3,7 @@ Uygulama versiyon bilgisi.
 Versiyon şeması: ver.MAJOR.MINOR.PATCH
 """
 
-VERSION = "0.3.8"
+VERSION = "0.3.9"
 
 def get_version():
     """Versiyon bilgisini döndür."""

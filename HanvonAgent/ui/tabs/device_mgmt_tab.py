@@ -5,15 +5,18 @@ Cihaz Yönetimi sekmesi
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QLineEdit, QSpinBox,
-    QDialog, QTextEdit, QProgressBar, QStyledItemDelegate, QFileDialog
+    QDialog, QTextEdit, QProgressBar, QStyledItemDelegate, QFileDialog,
+    QStyleOptionViewItem
 )
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtCore import Qt, QCoreApplication, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtCore import Qt, QCoreApplication, QTimer, QRect
 from datetime import datetime
 import time
 from models import Device, Employee, get_session
 from core.hanvon_client import HanvonClient
-from services.employee_sync_service import mark_pending, siblings_to_update, propagate_pending
+from services.employee_sync_service import (
+    mark_pending, siblings_to_update, propagate_pending, cross_device_names, differing_names,
+)
 from services.device_push_worker import DevicePushWorker
 from ui.dialogs.device_transfer_dialog import DeviceTransferDialog
 import logging
@@ -41,6 +44,52 @@ class SyncStatusDelegate(QStyledItemDelegate):
 
         painter.setPen(QColor(0, 0, 0))
         painter.drawText(option.rect, Qt.AlignCenter, value)
+
+# İsim hücresinde "başka cihazda farklı isim" rozeti (hücre metnine eklenmez, yalnız çizilir)
+NAME_BADGE_ROLE = Qt.UserRole + 1
+NAME_BADGE_BG = QColor(255, 224, 178)  # açık turuncu (Cihazlar sütunu vurgusuyla aynı aile)
+NAME_BADGE_FG = QColor(191, 54, 12)    # koyu turuncu
+
+
+class NameBadgeDelegate(QStyledItemDelegate):
+    """İsim hücresi: normal (düzenlenebilir) metin + sağda turuncu rozet.
+
+    Rozet yalnız çizilir; hücre metnine girmez — satır içi düzenleme ve
+    mark_pending rozeti hiç görmez.
+    """
+
+    def paint(self, painter, option, index):
+        badge = index.data(NAME_BADGE_ROLE)
+        if not badge:
+            super().paint(painter, option, index)
+            return
+
+        fm = option.fontMetrics
+        badge_w = min(fm.horizontalAdvance(badge) + 14, option.rect.width() // 2)
+        badge_rect = QRect(
+            option.rect.right() - badge_w - 3, option.rect.top() + 3,
+            badge_w, option.rect.height() - 6,
+        )
+
+        # Rozet alanı dahil satır zemini, sonra daraltılmış alanda normal metin
+        background = index.data(Qt.BackgroundRole)
+        if background is not None:
+            painter.fillRect(option.rect, background)
+        text_option = QStyleOptionViewItem(option)
+        text_option.rect = option.rect.adjusted(0, 0, -(badge_w + 6), 0)
+        super().paint(painter, text_option, index)
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(NAME_BADGE_BG)
+        painter.drawRoundedRect(badge_rect, 8, 8)
+        painter.setPen(NAME_BADGE_FG)
+        painter.drawText(
+            badge_rect, Qt.AlignCenter, fm.elidedText(badge, Qt.ElideRight, badge_w - 8)
+        )
+        painter.restore()
+
 
 # Satır alternasyon renkleri
 ROW_WHITE = QColor(255, 255, 255)
@@ -162,8 +211,12 @@ class DeviceMgmtTab(QWidget):
         self.filter_devices = QComboBox()
         self.filter_devices.addItem("Tümü", None)
         self.filter_devices.addItem("Eksik olanlar", "missing")  # tüm cihazlarda olmayan
-        self.filter_devices.setMaximumWidth(120)
-        self.filter_devices.setToolTip("Tüm cihazlarda kayıtlı olmayan personelleri göster")
+        self.filter_devices.addItem("İsmi farklı olanlar", "name_diff")  # başka cihazda farklı isim
+        self.filter_devices.setMaximumWidth(150)
+        self.filter_devices.setToolTip(
+            "Eksik olanlar: tüm cihazlarda kayıtlı olmayanlar\n"
+            "İsmi farklı olanlar: aynı ID başka cihazda farklı isimle kayıtlı"
+        )
         self.filter_devices.currentIndexChanged.connect(self._filter_employees)
 
         filter_layout = QHBoxLayout()
@@ -201,7 +254,7 @@ class DeviceMgmtTab(QWidget):
         self.employee_table.setHorizontalHeaderLabels(TABLE_HEADERS)
         self.employee_table.setColumnWidth(COL_NUM, 40)
         self.employee_table.setColumnWidth(COL_ID, 60)
-        self.employee_table.setColumnWidth(COL_NAME, 220)
+        self.employee_table.setColumnWidth(COL_NAME, 320)  # isim + farklı isim rozeti
         self.employee_table.setColumnWidth(COL_CARD, 120)
         self.employee_table.setColumnWidth(COL_TYPE, 100)
         self.employee_table.setColumnWidth(COL_SYNC, 80)
@@ -237,6 +290,7 @@ class DeviceMgmtTab(QWidget):
 
         # Sync sütunu delegate — stylesheet'i bypass eder, renk garantili
         self.employee_table.setItemDelegateForColumn(COL_SYNC, SyncStatusDelegate(self))
+        self.employee_table.setItemDelegateForColumn(COL_NAME, NameBadgeDelegate(self))
 
         # Header click for sorting
         self.employee_table.horizontalHeader().sectionClicked.connect(self._on_header_click)
@@ -303,7 +357,7 @@ class DeviceMgmtTab(QWidget):
         filter_sync = self.filter_sync.currentData()  # None veya "yeni" veya "ok"
         filter_devices = self.filter_devices.currentData()  # None veya "missing"
 
-        presence, all_device_names = self._device_presence()
+        presence, all_device_names, names_by_id, device_names = self._device_presence()
 
         # Tüm kriterlere göre filtrele (AND logic)
         filtered = []
@@ -335,6 +389,9 @@ class DeviceMgmtTab(QWidget):
             if filter_devices == "missing":
                 on_devices = presence.get(emp.employee_device_id, [])
                 if len(on_devices) >= len(all_device_names):
+                    continue
+            elif filter_devices == "name_diff":
+                if not differing_names(emp, names_by_id.get(emp.employee_device_id, {})):
                     continue
 
             filtered.append(emp)
@@ -370,6 +427,14 @@ class DeviceMgmtTab(QWidget):
                 name_item.setFlags(name_item.flags() | Qt.ItemIsEditable)
                 # Hangi employee'ye ait olduğunu hücrede sakla
                 name_item.setData(Qt.UserRole, emp)
+                # Aynı ID başka cihazda farklı isimle kayıtlıysa rozet + ayrıntı tooltip'i
+                diffs = differing_names(emp, names_by_id.get(emp.employee_device_id, {}))
+                if diffs:
+                    name_item.setData(NAME_BADGE_ROLE, self._name_badge_text(diffs, device_names))
+                    name_item.setToolTip("Diğer cihazlarda farklı isim:\n" + "\n".join(
+                        f"  • {device_names.get(dev_id, dev_id)}: {name or '(boş)'}"
+                        for dev_id, name in sorted(diffs.items())
+                    ))
                 self.employee_table.setItem(row, COL_NAME, name_item)
 
                 # Kart No (salt-okunur)
@@ -428,24 +493,33 @@ class DeviceMgmtTab(QWidget):
         self.export_btn.setEnabled(bool(self.current_employees))
 
     def _device_presence(self):
-        """Her employee_device_id'nin kayıtlı olduğu cihaz isimleri.
+        """Personel ID'lerinin cihazlara dağılımı (DB'deki son "Personelleri Getir" durumu).
 
-        Döner: ({employee_device_id: [cihaz adı, ...] (sıralı)}, [tüm cihaz adları])
-        DB'deki son "Personelleri Getir" durumunu yansıtır.
+        Döner: (presence, all_device_names, names_by_id, device_names)
+          presence:         {employee_device_id: [cihaz adı, ...] (sıralı)}
+          all_device_names: tüm cihaz adları (sıralı)
+          names_by_id:      {employee_device_id: {device_id: kayıtlı isim}}
+          device_names:     {device_id: cihaz adı}
         """
-        devices = self.session.query(Device).all()
-        names = {d.id: (d.name or d.ip) for d in devices}
-        presence = {}
-        rows = self.session.query(Employee.employee_device_id, Employee.device_id).all()
-        for emp_device_id, device_id in rows:
-            name = names.get(device_id)
-            if name is None:
-                continue
-            presence.setdefault(emp_device_id, set()).add(name)
-        return (
-            {k: sorted(v, key=str.lower) for k, v in presence.items()},
-            sorted(set(names.values()), key=str.lower),
-        )
+        device_names = {d.id: (d.name or d.ip) for d in self.session.query(Device).all()}
+        names_by_id = cross_device_names(self.session)
+        presence = {
+            emp_id: sorted(
+                {device_names[dev_id] for dev_id in by_device if dev_id in device_names},
+                key=str.lower,
+            )
+            for emp_id, by_device in names_by_id.items()
+        }
+        all_device_names = sorted(set(device_names.values()), key=str.lower)
+        return presence, all_device_names, names_by_id, device_names
+
+    @staticmethod
+    def _name_badge_text(diffs, device_names):
+        """Rozet metni: tek cihaz → '≠ CİHAZ: İSİM', birden çok → '≠ N cihazda farklı'."""
+        if len(diffs) == 1:
+            dev_id, name = next(iter(diffs.items()))
+            return f"≠ {device_names.get(dev_id, dev_id)}: {name or '(boş)'}"
+        return f"≠ {len(diffs)} cihazda farklı"
 
     def _build_action_widget(self, row, emp, row_color, is_pending, fetch_status=None):
         """Bir satırın işlem butonlarını (✎ düzenle, 📤 gönder, ✕ sil) ve varsa

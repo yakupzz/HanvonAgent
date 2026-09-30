@@ -231,3 +231,44 @@ class TestPropagatePending:
         assert svc.propagate_pending(db_session, sample_employee) == []
         db_session.refresh(sibling)
         assert sibling.pending_name is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cihazlar arası isim farkı — aynı ID, farklı cihazda farklı isim
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNormalizeName:
+    def test_turkish_case_and_spaces_ignored(self):
+        # Uygulama cihaza ASCII gönderdiği için bu farklar "fark" sayılmaz
+        assert svc.normalize_name("  GÖRKEM   serbes ") == svc.normalize_name("GORKEM SERBES")
+        assert svc.normalize_name("ÇAĞLAR ŞİŞMAN") == svc.normalize_name("CAGLAR SISMAN")
+
+    def test_different_names_differ(self):
+        assert svc.normalize_name("YELDA") != svc.normalize_name("BENSU")
+
+    def test_none_is_empty(self):
+        assert svc.normalize_name(None) == ""
+
+
+class TestDifferingNames:
+    def test_other_device_with_different_name(self, db_session, sample_employee, sibling):
+        sibling.name = "BAŞKA İSİM"
+        db_session.commit()
+        names = svc.cross_device_names(db_session)
+        diffs = svc.differing_names(sample_employee, names[237])
+        assert diffs == {sibling.device_id: "BAŞKA İSİM"}
+
+    def test_same_name_on_other_device_is_not_a_difference(self, db_session, sample_employee, sibling):
+        names = svc.cross_device_names(db_session)
+        assert svc.differing_names(sample_employee, names[237]) == {}
+
+    def test_own_device_excluded(self, db_session, sample_employee):
+        names = svc.cross_device_names(db_session)
+        assert names[237] == {sample_employee.device_id: "Eski İsim"}
+        assert svc.differing_names(sample_employee, names[237]) == {}
+
+    def test_empty_name_on_other_device_is_a_difference(self, db_session, sample_employee, sibling):
+        sibling.name = None
+        db_session.commit()
+        names = svc.cross_device_names(db_session)
+        assert svc.differing_names(sample_employee, names[237]) == {sibling.device_id: ""}
