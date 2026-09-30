@@ -96,17 +96,17 @@ ROW_WHITE = QColor(255, 255, 255)
 ROW_LIGHT_GRAY = QColor(245, 245, 245)
 
 # Sütun index'leri
-COL_NUM = 0
-COL_ID = 1
-COL_NAME = 2
-COL_CARD = 3
-COL_TYPE = 4
-COL_SYNC = 5
-COL_DEVICES = 6
-COL_ACTIONS = 7
+# ("#" sıra no sütunu kaldırıldı — satır numarasını sol dikey başlık gösteriyor)
+COL_ID = 0
+COL_NAME = 1
+COL_CARD = 2
+COL_TYPE = 3
+COL_SYNC = 4
+COL_DEVICES = 5
+COL_ACTIONS = 6
 
 TABLE_HEADERS = [
-    "#", "ID", "İsim Bilgisi", "Kart No", "Tür", "sync", "Cihazlar", "İşlemler"
+    "ID", "İsim Bilgisi", "Kart No", "Tür", "sync", "Cihazlar", "İşlemler"
 ]
 
 # Cihazlar sütunu — personel tüm cihazlarda değilse vurgulanır
@@ -136,10 +136,13 @@ class DeviceMgmtTab(QWidget):
         self.fetch_status = {}  # employee_device_id → "updated" | "new" | "failed"
 
         # Sorting state
-        self.sort_column = None  # Hangi sütun sıralanıyor
+        # Tablo her zaman ID artan gelir; başlık tıklamasıyla değişen sıralama
+        # aynı cihazda korunur, cihaz değişince tekrar ID artana döner
+        self.sort_column = COL_ID  # Hangi sütun sıralanıyor
         self.sort_ascending = True  # True = A->Z, False = Z->A
 
         self._init_ui()
+        self._update_header_indicator()  # "ID ▲"
         self._refresh_device_combo()
 
     def _init_ui(self):
@@ -167,6 +170,15 @@ class DeviceMgmtTab(QWidget):
         self.transfer_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; }")
         self.transfer_btn.clicked.connect(self._open_transfer_dialog)
         device_layout.addWidget(self.transfer_btn)
+
+        self.equalize_btn = QPushButton("⇄ İsimleri Eşitle")
+        self.equalize_btn.setToolTip(
+            "Seçili cihazdaki isimleri referans cihaza göre eşitle (yalnız isim; yüz/kart değişmez).\n"
+            "Hedefte aynı ID'de başka kişi olanlar varsayılan olarak atlanır.")
+        self.equalize_btn.setStyleSheet("QPushButton { background-color: #7E57C2; color: white; font-weight: bold; }")
+        self.equalize_btn.clicked.connect(self._open_equalize_dialog)
+        self.equalize_btn.setEnabled(False)
+        device_layout.addWidget(self.equalize_btn)
 
         device_group.setLayout(device_layout)
         layout.addWidget(device_group)
@@ -252,7 +264,6 @@ class DeviceMgmtTab(QWidget):
         self.employee_table = QTableWidget()
         self.employee_table.setColumnCount(len(TABLE_HEADERS))
         self.employee_table.setHorizontalHeaderLabels(TABLE_HEADERS)
-        self.employee_table.setColumnWidth(COL_NUM, 40)
         self.employee_table.setColumnWidth(COL_ID, 60)
         self.employee_table.setColumnWidth(COL_NAME, 320)  # isim + farklı isim rozeti
         self.employee_table.setColumnWidth(COL_CARD, 120)
@@ -320,7 +331,10 @@ class DeviceMgmtTab(QWidget):
         enabled = device_id is not None
 
         self.fetch_all_employees_btn.setEnabled(enabled)
+        self.equalize_btn.setEnabled(enabled)
         self.fetch_status = {}  # önceki cihazın getir sonucu bu cihaza ait değil
+        self.sort_column, self.sort_ascending = COL_ID, True  # yeni cihaz → ID artan
+        self._update_header_indicator()
 
         if device_id:
             self._load_employees(device_id)
@@ -410,12 +424,6 @@ class DeviceMgmtTab(QWidget):
                 row_color = ROW_WHITE if row % 2 == 0 else ROW_LIGHT_GRAY
                 is_pending = (emp.sync_status == "yeni")
 
-                # Sıra numarası (salt-okunur)
-                row_num_item = QTableWidgetItem(str(row + 1))
-                row_num_item.setTextAlignment(Qt.AlignCenter)
-                row_num_item.setFlags(row_num_item.flags() & ~Qt.ItemIsEditable)
-                self.employee_table.setItem(row, COL_NUM, row_num_item)
-
                 # ID (salt-okunur)
                 id_item = QTableWidgetItem(str(emp.employee_device_id))
                 id_item.setTextAlignment(Qt.AlignCenter)
@@ -468,7 +476,7 @@ class DeviceMgmtTab(QWidget):
                 self.employee_table.setItem(row, COL_DEVICES, devices_item)
 
                 # Satır arka plan rengi (SYNC hariç — onun kendi rengi var)
-                for col in (COL_NUM, COL_ID, COL_NAME, COL_CARD, COL_TYPE, COL_DEVICES):
+                for col in (COL_ID, COL_NAME, COL_CARD, COL_TYPE, COL_DEVICES):
                     item = self.employee_table.item(row, col)
                     if item:
                         item.setBackground(row_color)
@@ -1190,7 +1198,7 @@ Debug: Konsol çıktısını kontrol edin"""
     def _on_header_click(self, col):
         """Header'a tıklandı — sıralama yap."""
         # Sıralama yapılamayan sütunlar
-        if col in (COL_NUM, COL_ACTIONS):
+        if col == COL_ACTIONS:
             return
 
         # Aynı sütuna tekrar tıklandıysa → ters sırala
@@ -1218,9 +1226,25 @@ Debug: Konsol çıktısını kontrol edin"""
                 header.model().setHeaderData(col, Qt.Horizontal, title)
 
     def _open_transfer_dialog(self):
-        """Cihaz transferi dialog'unu aç."""
+        """Cihaz transferi dialog'unu aç; kapanınca tablo güncel veriyle yenilenir."""
         dialog = DeviceTransferDialog(self)
         dialog.exec()
+        self._reload_current_device()
+
+    def _open_equalize_dialog(self):
+        """⇄ İsimleri Eşitle — hedef: seçili cihaz, referans: diğer cihaz (değiştirilebilir)."""
+        device_id = self.device_combo.currentData()
+        if device_id is None:
+            return
+        dialog = DeviceTransferDialog(self, target_device_id=device_id, equalize=True)
+        dialog.exec()
+        self._reload_current_device()
+
+    def _reload_current_device(self):
+        device_id = self.device_combo.currentData()
+        if device_id is not None:
+            self.session.expire_all()  # transfer worker kendi session'ında yazdı
+            self._load_employees(device_id)
 
     def _bulk_send_employees(self):
         """Düzenlenen personelleri tek tek cihaza gönder (hata toleranslı)."""

@@ -48,3 +48,28 @@ from models import init_db  # noqa: E402
 # Create the schema on the temp DB so widgets constructing get_session()
 # at import/instantiation time find the expected tables.
 init_db()
+
+# --- Ağ güvenlik ağı --------------------------------------------------------
+# Testler gerçek cihazlara (172.16.1.218/.219 — kapı erişim kontrolü yapan
+# ÜRETİM cihazları) ASLA bağlanamasın. Bir test HanvonClient/worker'ı sahtesiyle
+# değiştirmeyi unutursa bağlantı burada reddedilir (2026-09-30: patch kapsamı
+# dar kalan bir dialog testi gerçek DeviceListFetchWorker'ı başlatmıştı).
+# Oturum boyunca kalıcıdır — testten taşan thread'ler de engellenir.
+import ipaddress  # noqa: E402
+import socket as _socket  # noqa: E402
+
+_real_connect = _socket.socket.connect
+
+
+def _guarded_connect(self, address, *args, **kwargs):
+    host = address[0] if isinstance(address, tuple) else address
+    try:
+        allowed = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        allowed = host == "localhost"
+    if not allowed:
+        raise ConnectionRefusedError(f"Testlerde ağ erişimi yasak: {address!r}")
+    return _real_connect(self, address, *args, **kwargs)
+
+
+_socket.socket.connect = _guarded_connect

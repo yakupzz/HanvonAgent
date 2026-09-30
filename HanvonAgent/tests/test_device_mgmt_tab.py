@@ -21,11 +21,11 @@ from models import Device, Employee
 from ui.tabs.device_mgmt_tab import DeviceMgmtTab, SYNC_OK_COLOR, SYNC_PENDING_COLOR
 
 
-# Sütun index'leri (8 sütunlu tabloda)
-SYNC_COL = 5
-DEVICES_COL = 6
-ACTION_COL = 7
-NAME_COL = 2
+# Sütun index'leri modülden — sütun eklenip çıkınca testler kaymasın
+from ui.tabs.device_mgmt_tab import (  # noqa: E402
+    COL_ID as ID_COL, COL_NAME as NAME_COL, COL_SYNC as SYNC_COL,
+    COL_DEVICES as DEVICES_COL, COL_ACTIONS as ACTION_COL, TABLE_HEADERS,
+)
 
 
 @pytest.fixture
@@ -96,8 +96,14 @@ def _load(tab, employees, device):
 
 
 class TestTableStructure:
-    def test_has_eight_columns(self, tab):
-        assert tab.employee_table.columnCount() == 8
+    def test_has_seven_columns(self, tab):
+        assert tab.employee_table.columnCount() == 7
+
+    def test_no_row_number_column(self, tab):
+        """'#' sütunu kaldırıldı — satır numarasını sol dikey başlık zaten gösteriyor."""
+        assert "#" not in TABLE_HEADERS
+        assert not tab.employee_table.verticalHeader().isHidden()  # sol şeritteki 1, 2, 3…
+        assert TABLE_HEADERS[0] == "ID"
 
     def test_devices_header_present(self, tab):
         header = tab.employee_table.horizontalHeaderItem(DEVICES_COL).text()
@@ -172,7 +178,7 @@ class TestInlineEdit:
 
     def test_id_cell_not_editable(self, tab, employees, device):
         _load(tab, employees, device)
-        item = tab.employee_table.item(0, 1)
+        item = tab.employee_table.item(0, ID_COL)
         assert not (item.flags() & Qt.ItemIsEditable)
 
     def test_editing_name_calls_mark_pending(self, tab, employees, device):
@@ -828,3 +834,80 @@ class TestNameMismatchBadge:
         assert isinstance(tab.employee_table.itemDelegateForColumn(NAME_COL), NameBadgeDelegate)
         tab.resize(1200, 400)
         assert not tab.employee_table.grab().isNull()  # rozetli satırlar gerçekten çizilir
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Varsayılan sıralama — tablo her zaman ID artan gelir
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ids_in_table(tab):
+    from ui.tabs.device_mgmt_tab import COL_ID
+    return [int(tab.employee_table.item(r, COL_ID).text()) for r in range(tab.employee_table.rowCount())]
+
+
+@pytest.fixture
+def unordered(session, device):
+    """DB'ye karışık sırada eklenmiş personeller."""
+    emps = [Employee(employee_device_id=i, name=f"P{i}", device_id=device.id) for i in (200, 3, 100, 45)]
+    session.add_all(emps)
+    session.commit()
+    return emps
+
+
+class TestDefaultIdSort:
+    def test_table_comes_sorted_by_id_ascending(self, tab, device, unordered):
+        _load(tab, unordered, device)
+        assert _ids_in_table(tab) == [3, 45, 100, 200]
+
+    def test_header_shows_id_ascending_indicator(self, tab):
+        from ui.tabs.device_mgmt_tab import COL_ID
+        assert tab.employee_table.model().headerData(COL_ID, Qt.Horizontal) == "ID ▲"
+
+    def test_device_selection_loads_id_ascending(self, tab, device, unordered):
+        tab.device_combo.addItem("test", device.id)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+        assert _ids_in_table(tab) == [3, 45, 100, 200]
+
+    def test_user_sort_kept_on_same_device_reset_on_device_change(self, tab, session, device, unordered):
+        from ui.tabs.device_mgmt_tab import COL_ID
+        tab.device_combo.addItem("test", device.id)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+        tab._on_header_click(COL_ID)  # ID azalan
+        assert _ids_in_table(tab) == [200, 100, 45, 3]
+        tab._load_employees(device.id)  # ör. Personelleri Getir sonrası yenileme
+        assert _ids_in_table(tab) == [200, 100, 45, 3]
+
+        tab.device_combo.setCurrentIndex(0)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+        assert _ids_in_table(tab) == [3, 45, 100, 200]
+        assert tab.employee_table.model().headerData(COL_ID, Qt.Horizontal) == "ID ▲"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ⇄ İsimleri Eşitle — referans (diğer cihaz) → seçili cihaz, yalnız isim
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEqualizeButton:
+    def _select(self, tab, device):
+        tab.device_combo.addItem("test", device.id)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+
+    def test_disabled_without_device(self, tab):
+        assert not tab.equalize_btn.isEnabled()
+
+    def test_opens_equalize_dialog_for_selected_device_and_reloads(self, tab, device):
+        self._select(tab, device)
+        assert tab.equalize_btn.isEnabled()
+        with patch("ui.tabs.device_mgmt_tab.DeviceTransferDialog") as Dialog, \
+                patch.object(tab, "_load_employees") as reload:
+            tab.equalize_btn.click()
+        Dialog.assert_called_once_with(tab, target_device_id=device.id, equalize=True)
+        Dialog.return_value.exec.assert_called_once()
+        reload.assert_called_once_with(device.id)
+
+    def test_transfer_dialog_also_reloads_table(self, tab, device):
+        self._select(tab, device)
+        with patch("ui.tabs.device_mgmt_tab.DeviceTransferDialog"), \
+                patch.object(tab, "_load_employees") as reload:
+            tab.transfer_btn.click()
+        reload.assert_called_once_with(device.id)
