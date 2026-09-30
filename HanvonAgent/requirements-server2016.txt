@@ -1,0 +1,22 @@
+# Windows Server 2016 / Windows 10 1607 derlemesi (Python 3.12) — build_server2016.bat kullanır
+#
+# PySide6 6.7.3'e sabit, çünkü PyPI'daki daha yeni wheel'ler Server 2016'da açılmıyor (BUG-020):
+#   - 6.8+  Qt6Core.dll -> KERNEL32!SetThreadDescription (1607'de kernel32'de yok, QTBUG-134075)
+#   - 6.10+ ayrıca icuuc.dll (Windows 10 1703+)
+# PySide6 6.7.3 Python 3.13'ü desteklemez -> bu derleme Python 3.12 ile yapılır.
+#
+# requirements.txt değişirse aynı değişikliği buraya da uygula (PySide6 satırı hariç).
+PySide6==6.7.3
+SQLAlchemy>=2.0.30
+APScheduler>=3.10.0
+FastAPI>=0.100.0
+uvicorn>=0.24.0
+httpx>=0.25.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+cryptography>=41.0.0
+python-dotenv>=1.0.0
+openpyxl>=3.1.0
+
+# Derleme aracı
+pyinstaller==6.20.0

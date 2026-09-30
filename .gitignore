@@ -34,3 +34,6 @@ HanvonAgent.spec
 
 # Git backup
 .git_backup/
+
+# Server 2016 derleme ortamı (build_server2016.bat — taşınabilir Python 3.12 + venv)
+HanvonAgent/.build-server2016/
