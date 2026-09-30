@@ -6,13 +6,16 @@ Akış:
    (pending_name set edilir, sync_status="yeni", orijinal name korunur).
 2. Kullanıcı "Gönder" (📤) butonuna basar -> push_employee() çağrılır
    (cihaza SetNameTable gönderilir; başarılıysa pending -> name, sync="ok").
+3. Aynı personel ID'si başka cihazlarda da kayıtlıysa (her cihazın ayrı
+   Employee satırı var) propagate_pending() bekleyen ismi o satırlara da
+   işaretler; her biri kendi cihazına ayrıca push edilir.
 
 MVC: Bu modül saf iş mantığıdır; UI veya QThread bilgisi içermez.
 HanvonClient dışarıdan enjekte edilebilir (test için mock'lanır).
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -64,6 +67,43 @@ def mark_pending(session: Session, employee: Employee, new_name: str) -> Employe
 
     session.commit()
     return employee
+
+
+def find_siblings(session: Session, employee: Employee) -> List[Employee]:
+    """Aynı personel ID'siyle (employee_device_id) BAŞKA cihazlarda kayıtlı satırlar."""
+    return (
+        session.query(Employee)
+        .filter(
+            Employee.employee_device_id == employee.employee_device_id,
+            Employee.device_id != employee.device_id,
+        )
+        .order_by(Employee.device_id)
+        .all()
+    )
+
+
+def siblings_to_update(session: Session, employee: Employee) -> List[Employee]:
+    """Bekleyen yeni isme henüz sahip olmayan kardeş satırlar.
+
+    employee'de bekleyen isim yoksa boş liste döner. Cihazdaki ismi zaten
+    yeni isimle aynı olan kardeşler atlanır (gönderilecek bir şey yok).
+    """
+    target = (employee.pending_name or "").strip()
+    if not target:
+        return []
+    return [s for s in find_siblings(session, employee) if (s.name or "").strip() != target]
+
+
+def propagate_pending(session: Session, employee: Employee) -> List[Employee]:
+    """employee'nin bekleyen ismini kardeş satırlara bekleyen değişiklik olarak işaretle.
+
+    Returns:
+        İşaretlenen (kendi cihazlarına gönderilmesi gereken) kardeş satırlar.
+    """
+    siblings = siblings_to_update(session, employee)
+    for sibling in siblings:
+        mark_pending(session, sibling, employee.pending_name)
+    return siblings
 
 
 def push_employee(

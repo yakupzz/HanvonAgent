@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
 from core import app_paths
+from core.single_instance import SingleInstance
 from models import init_db
 from ui.main_window import MainWindow
 from services.service_manager import ServiceManager, build_default_config
@@ -244,6 +245,18 @@ def main():
             app = QApplication(sys.argv)
             logger.info("[OK] Qt uygulamasi hazir")
 
+            # Tek örnek: zaten açıksa öne getir ve çık — iki örnek aynı cihaza
+            # paralel bağlanıp birbirini zaman aşımına düşürüyordu
+            instance = SingleInstance(app_paths.data_dir() / "hanvon_gui.lock")
+            if not instance.acquire():
+                notified = instance.notify_primary()
+                logger.info(
+                    "[TEK ÖRNEK] HanvonAgent zaten açık — %s, bu kopya kapanıyor",
+                    "açık pencere öne getirildi" if notified else "açık örneğe ulaşılamadı",
+                )
+                sys.exit(0)
+                return
+
             # Ana pencere
             try:
                 window = MainWindow()
@@ -251,6 +264,13 @@ def main():
             except Exception as e:
                 logger.error(f"MainWindow olusturma hatasi: {str(e)}", exc_info=True)
                 raise
+
+            def bring_to_front():
+                window.showNormal()
+                window.raise_()
+                window.activateWindow()
+
+            instance.activated.connect(bring_to_front)
 
             # Minimize to tray on startup (--minimized flag)
             if "--minimized" in sys.argv:

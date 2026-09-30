@@ -107,9 +107,11 @@ class AddDeviceDialog(QDialog):
 
         try:
             client = HanvonClient(ip, comm_key=comm_key if comm_key else None)
-            client.connect()
-            device_info = client.get_device_info()
-            client.disconnect()
+            try:
+                client.connect()
+                device_info = client.get_device_info()
+            finally:
+                client.disconnect()
 
             if device_info:
                 dev_id = device_info.get('dev_id', 'N/A')

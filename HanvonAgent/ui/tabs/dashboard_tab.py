@@ -370,9 +370,11 @@ class DashboardTab(QWidget):
                     try:
                         from core.hanvon_client import HanvonClient
                         client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
-                        client.connect()
-                        ok = client.delete_all_records_now()
-                        client.disconnect()
+                        try:
+                            client.connect()
+                            ok = client.delete_all_records_now()
+                        finally:
+                            client.disconnect()
                         if ok:
                             self._append_output(f"[SİLİNDİ] {device.name}: cihazdaki G/C kayıtları temizlendi", color="yellow")
                             logger.info(f"[SİLİNDİ] {device.name}: DeleteAllRecord OK")
@@ -448,9 +450,11 @@ class DashboardTab(QWidget):
         try:
             from core.hanvon_client import HanvonClient
             client = HanvonClient(ip, port=port, comm_key=commkey)
-            client.connect()
-            info = client.get_device_info()
-            client.disconnect()
+            try:
+                client.connect()
+                info = client.get_device_info()
+            finally:
+                client.disconnect()
 
             if info:
                 result = f"[BASARILI] Baglanti OK\nCihaz ID: {info.get('dev_id', 'N/A')}\nIP: {info.get('ip', 'N/A')}"
@@ -486,32 +490,33 @@ class DashboardTab(QWidget):
             from datetime import datetime
 
             client = HanvonClient(ip, port=port, comm_key=commkey)
-            client.connect()
+            try:
+                client.connect()
 
-            # 1. Mevcut saati sor
-            info = client.get_device_info()
-            current_time = info.get('time', 'Bilinmiyor') if info else 'Bilinmiyor'
+                # 1. Mevcut saati sor
+                info = client.get_device_info()
+                current_time = info.get('time', 'Bilinmiyor') if info else 'Bilinmiyor'
 
-            msg_current = f"[MEVCUT] Cihaz saati: {current_time}"
-            self.output_text.append(msg_current)
-            logger.info(msg_current)
-            self._process_events()
+                msg_current = f"[MEVCUT] Cihaz saati: {current_time}"
+                self.output_text.append(msg_current)
+                logger.info(msg_current)
+                self._process_events()
 
-            # 2. Sunucu saatini al
-            now = datetime.now()
-            day_of_week = now.strftime("%w")
+                # 2. Sunucu saatini al
+                now = datetime.now()
+                day_of_week = now.strftime("%w")
 
-            msg_update = f"[GUNCELLEME] Yeni saat: {now.strftime('%Y-%m-%d %H:%M:%S')}"
-            self.output_text.append(msg_update)
-            logger.info(msg_update)
-            self._process_events()
+                msg_update = f"[GUNCELLEME] Yeni saat: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+                self.output_text.append(msg_update)
+                logger.info(msg_update)
+                self._process_events()
 
-            # 3. SetDeviceInfo ile saat guncelle
-            response = client.send_command(
-                f'SetDeviceInfo(time="{now.strftime("%Y-%m-%d %H:%M:%S")}" week="{day_of_week}")'
-            )
-
-            client.disconnect()
+                # 3. SetDeviceInfo ile saat guncelle
+                response = client.send_command(
+                    f'SetDeviceInfo(time="{now.strftime("%Y-%m-%d %H:%M:%S")}" week="{day_of_week}")'
+                )
+            finally:
+                client.disconnect()
 
             if "success" in response.lower():
                 result = f"\n[BASARILI] Saat senkronize edildi!\nEski: {current_time}\nYeni: {now.strftime('%Y-%m-%d %H:%M:%S')}"

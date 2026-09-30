@@ -13,7 +13,7 @@ from datetime import datetime
 import time
 from models import Device, Employee, get_session
 from core.hanvon_client import HanvonClient
-from services.employee_sync_service import mark_pending
+from services.employee_sync_service import mark_pending, siblings_to_update, propagate_pending
 from services.device_push_worker import DevicePushWorker
 from ui.dialogs.device_transfer_dialog import DeviceTransferDialog
 import logging
@@ -80,6 +80,9 @@ class DeviceMgmtTab(QWidget):
         self.current_employees = []
         self.current_device_id = None
         self._active_workers = []  # Çalışan worker referanslarını tut (GC önle)
+        # Cihaza gönderilmekte olan Employee.id'ler — çift tıklamayla paralel
+        # bağlantı açılmasın (2026-09-30: tek düzenleme için 3 push → timeout)
+        self._pushing = set()
         # Son "Personelleri Getir" sonucu — cihaz değişince temizlenir
         self.fetch_status = {}  # employee_device_id → "updated" | "new" | "failed"
 
@@ -466,8 +469,14 @@ class DeviceMgmtTab(QWidget):
         edit_btn.clicked.connect(lambda checked, r=row: self._start_edit_name(r))
         action_layout.addWidget(edit_btn)
 
-        # 📤 Gönder — yalnızca bekleyen değişikliği olan satırlarda
-        if is_pending:
+        # ⏳ Gönderiliyor — tıklanamaz; 📤 Gönder — yalnızca bekleyen değişikliği olan satırlarda
+        if emp.id in self._pushing:
+            busy_btn = QPushButton("⏳")
+            busy_btn.setMaximumWidth(32)
+            busy_btn.setToolTip("Cihaza gönderiliyor…")
+            busy_btn.setEnabled(False)
+            action_layout.addWidget(busy_btn)
+        elif is_pending:
             send_btn = QPushButton("📤")
             send_btn.setMaximumWidth(32)
             send_btn.setToolTip("Değişikliği cihaza gönder")
@@ -528,42 +537,142 @@ class DeviceMgmtTab(QWidget):
         self._filter_employees()
 
     def _send_employee_to_device(self, employee):
-        """📤 — Bekleyen isim değişikliğini cihaza gönder (QThread ile)."""
+        """📤 — Bekleyen isim değişikliğini cihaza gönder (QThread ile).
+
+        Aynı personel ID'si başka cihazlarda eski isimle kayıtlıysa değişikliğin
+        oralara da gönderilmesi sorulur (Evet: tümü, Hayır: yalnız bu cihaz).
+        """
+        if employee.id in self._pushing:
+            logger.info("[GÖNDER] ID %s zaten gönderiliyor — tekrar tıklama yok sayıldı",
+                        employee.employee_device_id)
+            return
+
         device_id = employee.device_id or self.current_device_id
         if device_id is None:
             QMessageBox.warning(self, "Cihaz Yok", "Hedef cihaz belirlenemedi.")
             return
 
-        worker = DevicePushWorker(employee.id, device_id)
-        self._active_workers.append(worker)
-        worker.finished.connect(
-            lambda success, msg, e=employee, w=worker: self._handle_worker_finished(
-                success, msg, e, w
+        targets = [(employee, device_id)]
+        siblings = siblings_to_update(self.session, employee)
+        if siblings:
+            lines = "\n".join(
+                f"  • {self._device_label(s.device_id)} — cihazdaki isim: {s.name or '—'}"
+                for s in siblings
             )
-        )
-        worker.start()
+            reply = self._ask_send_to_other_devices(
+                f"ID {employee.employee_device_id} '{employee.pending_name}' "
+                f"şu cihazlarda da kayıtlı:\n\n{lines}"
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.Yes:
+                targets += [(s, s.device_id) for s in propagate_pending(self.session, employee)]
 
-    def _handle_worker_finished(self, success, msg, employee, worker):
+        self._start_push_workers(targets)
+
+    def _ask_send_to_other_devices(self, text):
+        """Kardeş kayıtlar için Evet (tüm cihazlar) / Hayır (seçili cihaz) / İptal sor."""
+        return QMessageBox.question(
+            self, "Diğer Cihazlar",
+            f"{text}\n\nİsim değişikliği bu cihazlara da gönderilsin mi?\n\n"
+            "Evet: tüm cihazlara  |  Hayır: sadece seçili cihaza  |  İptal: gönderme",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+
+    def _device_label(self, device_id):
+        """Mesajlarda gösterilecek cihaz adı: 'AD (ip)'."""
+        device = self.session.get(Device, device_id)
+        if device is None:
+            return f"Cihaz #{device_id}"
+        return f"{device.name or device.ip} ({device.ip})"
+
+    def _start_push_workers(self, targets):
+        """Her (personel, cihaz_id) hedefi için ayrı DevicePushWorker başlat.
+
+        Tek hedefte eski davranış (on_push_finished); birden çok hedefte
+        sonuçlar toplanır ve hepsi bitince cihaz cihaz tek özet gösterilir.
+        """
+        group = None
+        if len(targets) > 1:
+            first = targets[0][0]
+            group = {
+                "left": len(targets),
+                "results": [],
+                "title": f"ID {first.employee_device_id} → '{first.pending_name}'",
+            }
+
+        for emp, device_id in targets:
+            self._pushing.add(emp.id)
+            worker = DevicePushWorker(emp.id, device_id)
+            self._active_workers.append(worker)
+            worker.finished.connect(
+                lambda success, msg, e=emp, eid=emp.id, w=worker, g=group,
+                       lbl=self._device_label(device_id):
+                    self._handle_worker_finished(success, msg, e, w, g, lbl, eid)
+            )
+            worker.start()
+
+        # ⏳ göster
+        if self.current_employees:
+            self._filter_employees()
+
+    def _handle_worker_finished(self, success, msg, employee, worker, group=None, label=None,
+                                employee_id=None):
         """Worker bitti — UI'yı güncelle, worker referansını temizle."""
+        self._pushing.discard(employee_id if employee_id is not None else employee.id)
         try:
-            self.on_push_finished(success, msg, employee)
+            if group is None:
+                self.on_push_finished(success, msg, employee, label)
+            else:
+                self._on_group_push_finished(group, success, msg, label)
         finally:
             if worker in self._active_workers:
                 self._active_workers.remove(worker)
 
-    def on_push_finished(self, success, msg, employee):
-        """Cihaza gönderme sonucu — başarılıysa yenile, değilse hata göster."""
+    def _on_group_push_finished(self, group, success, msg, label):
+        """Çok cihazlı gönderimde bir hedef bitti; sonuncusunda özet göster."""
+        group["results"].append((label, success, msg))
+        group["left"] -= 1
+        if group["left"] > 0:
+            return
+
+        self.session.expire_all()
+        if self.current_device_id is not None:
+            self._load_employees(self.current_device_id)
+
+        lines = [
+            f"✅ {lbl}" if ok else f"❌ {lbl} — {m or 'bilinmeyen hata'}"
+            for lbl, ok, m in group["results"]
+        ]
+        text = f"{group['title']}\n\n" + "\n".join(lines)
+        if all(ok for _, ok, _ in group["results"]):
+            QMessageBox.information(self, "Gönderim Sonucu", text)
+        else:
+            text += "\n\nBaşarısız cihazlarda değişiklik 'Düzenlendi' olarak kalır, tekrar gönderebilirsiniz."
+            QMessageBox.warning(self, "Gönderim Sonucu", text)
+
+    def on_push_finished(self, success, msg, employee, label=None):
+        """Cihaza gönderme sonucu — başarılıysa yenile ve bildir, değilse hata göster."""
+        label = label or self._device_label(employee.device_id)
         if success:
             # Worker farklı bir session'da değişiklik yapmış olabilir;
             # identity map'i flush ederek stale cache okumayı önle.
             self.session.expire_all()
-            device_id = employee.device_id or self.current_device_id
+            # Tabloda seçili cihaz gösterilir — başka cihazın satırı gönderilmiş olsa bile
+            device_id = self.current_device_id or employee.device_id
             if device_id is not None:
                 self._load_employees(device_id)
+            QMessageBox.information(
+                self, "Gönderildi",
+                f"✅ ID {employee.employee_device_id} '{employee.name}'\n→ {label} cihazına gönderildi."
+            )
         else:
+            if self.current_employees:
+                self._filter_employees()  # ⏳ → 📤 (tekrar denenebilir)
             QMessageBox.critical(
                 self, "Gönderim Başarısız",
-                f"Personel cihaza gönderilemedi:\n\n{msg}"
+                f"Personel cihaza gönderilemedi ({label}):\n\n{msg}"
             )
 
     def _fetch_all_employees(self):
@@ -874,10 +983,11 @@ Debug: Konsol çıktısını kontrol edin"""
                     device = self.session.query(Device).filter_by(id=self.current_device_id).first()
                     if device:
                         client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
-                        client.connect()
-
-                        result = client.delete_employee(str(emp_id))
-                        client.disconnect()
+                        try:
+                            client.connect()
+                            result = client.delete_employee(str(emp_id))
+                        finally:
+                            client.disconnect()
 
                         if result:
                             device_deleted = True
@@ -1044,6 +1154,7 @@ Debug: Konsol çıktısını kontrol edin"""
         pending_employees = [
             emp for emp in self.current_employees
             if emp.sync_status == "yeni" and emp.pending_name
+            and emp.id not in self._pushing  # 📤 ile zaten gönderilmekte olanlar hariç
         ]
 
         if not pending_employees:
@@ -1070,6 +1181,30 @@ Debug: Konsol çıktısını kontrol edin"""
         if reply != QMessageBox.Yes:
             return
 
+        # Aynı ID başka cihazlarda eski isimle kayıtlıysa — oralara da gönderilsin mi?
+        batches = [(device, pending_employees)]
+        siblings = [s for emp in pending_employees for s in siblings_to_update(self.session, emp)]
+        if siblings:
+            per_device = {}
+            for sib in siblings:
+                per_device[sib.device_id] = per_device.get(sib.device_id, 0) + 1
+            lines = "\n".join(
+                f"  • {self._device_label(dev_id)}: {count} personel"
+                for dev_id, count in per_device.items()
+            )
+            reply = self._ask_send_to_other_devices(
+                f"Düzenlenen personellerden bazıları başka cihazlarda da eski isimle kayıtlı:\n\n{lines}"
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.Yes:
+                by_device = {}
+                for emp in pending_employees:
+                    for sib in propagate_pending(self.session, emp):
+                        by_device.setdefault(sib.device_id, []).append(sib)
+                for dev_id, emps in by_device.items():
+                    batches.append((self.session.get(Device, dev_id), emps))
+
         # Progress diyalogu
         progress_dialog = QDialog(self)
         progress_dialog.setWindowTitle("Personeller Gönderiliyor...")
@@ -1086,7 +1221,43 @@ Debug: Konsol çıktısını kontrol edin"""
         progress_dialog.show()
         QCoreApplication.processEvents()
 
-        # Tek tek gönder
+        # Cihaz cihaz, tek tek gönder
+        total = sum(len(emps) for _, emps in batches)
+        successful = 0
+        failed_list = []  # (cihaz etiketi, employee)
+        for batch_device, batch_emps in batches:
+            label = self._device_label(batch_device.id)
+            if len(batches) > 1:
+                result_text.append(f"\n── {label} — {len(batch_emps)} personel ──")
+            ok_count, failed = self._push_batch_to_device(batch_device, batch_emps, result_text)
+            self._write_audit_log_bulk_send(batch_emps, ok_count, len(failed), batch_device.id)
+            successful += ok_count
+            failed_list.extend((label, e) for e in failed)
+
+        # Özet
+        result_text.append("\n" + "=" * 50)
+        result_text.append(f"✅ Başarılı: {successful}/{total}")
+        if failed_list:
+            result_text.append(f"❌ Başarısız: {len(failed_list)} (tekrar göndermek için butona basın)")
+            for label, e in failed_list:
+                result_text.append(f"   ID {e.employee_device_id} @ {label}")
+
+        # UI güncelle
+        self._load_employees(device_id)
+
+        # Kapat butonu
+        close_btn = QPushButton("Kapat")
+        close_btn.clicked.connect(progress_dialog.accept)
+        layout.addWidget(close_btn)
+
+        progress_dialog.exec()
+
+    def _push_batch_to_device(self, device, employees, result_text):
+        """Bekleyen isimleri tek bağlantıda, tek tek bir cihaza gönder (hata toleranslı).
+
+        Returns:
+            (başarılı sayısı, başarısız Employee listesi)
+        """
         successful = 0
         failed_list = []
         client = None
@@ -1096,9 +1267,9 @@ Debug: Konsol çıktısını kontrol edin"""
             client.connect()
             logger.info(f"[TOPLU] Cihaza bağlandı: {device.ip}")
 
-            for idx, emp in enumerate(pending_employees, 1):
+            for idx, emp in enumerate(employees, 1):
                 emp_info = f"{emp.pending_name} (ID {emp.employee_device_id})"
-                result_text.append(f"{idx}/{len(pending_employees)}: {emp_info} → Gönderiliyor...")
+                result_text.append(f"{idx}/{len(employees)}: {emp_info} → Gönderiliyor...")
                 QCoreApplication.processEvents()
 
                 try:
@@ -1116,11 +1287,11 @@ Debug: Konsol çıktısını kontrol edin"""
 
                         result_text.append(f"   ✅ Başarılı")
                         successful += 1
-                        logger.info(f"[TOPLU] Gönderilen: ID {emp.employee_device_id} '{emp.name}'")
+                        logger.info(f"[TOPLU] Gönderilen: ID {emp.employee_device_id} '{emp.name}' → {device.ip}")
                     else:
                         result_text.append(f"   ❌ Cihaz reddetti")
                         failed_list.append(emp)
-                        logger.warning(f"[TOPLU] Reddedilen: ID {emp.employee_device_id}")
+                        logger.warning(f"[TOPLU] Reddedilen: ID {emp.employee_device_id} → {device.ip}")
 
                 except Exception as e:
                     result_text.append(f"   ❌ Hata: {str(e)[:50]}")
@@ -1134,7 +1305,9 @@ Debug: Konsol çıktısını kontrol edin"""
         except Exception as e:
             result_text.append(f"\n❌ Bağlantı hatası: {str(e)}")
             logger.error(f"[TOPLU] Bağlantı hatası: {str(e)}", exc_info=True)
-            failed_list = pending_employees  # Hepsi başarısız
+            # Bağlantı koptu — bu cihazda henüz gönderilmemiş olanlar da başarısız
+            failed_list = [emp for emp in employees if emp.sync_status == "yeni"]
+            successful = len(employees) - len(failed_list)
         finally:
             if client:
                 try:
@@ -1142,26 +1315,7 @@ Debug: Konsol çıktısını kontrol edin"""
                 except:
                     pass
 
-        # Özet
-        result_text.append("\n" + "=" * 50)
-        result_text.append(f"✅ Başarılı: {successful}/{len(pending_employees)}")
-        if failed_list:
-            result_text.append(f"❌ Başarısız: {len(failed_list)} (tekrar göndermek için butona basın)")
-            failed_ids = [f"ID {e.employee_device_id}" for e in failed_list]
-            result_text.append(f"   {', '.join(failed_ids)}")
-
-        # Audit log
-        self._write_audit_log_bulk_send(pending_employees, successful, len(failed_list), device_id)
-
-        # UI güncelle
-        self._load_employees(device_id)
-
-        # Kapat butonu
-        close_btn = QPushButton("Kapat")
-        close_btn.clicked.connect(progress_dialog.accept)
-        layout.addWidget(close_btn)
-
-        progress_dialog.exec()
+        return successful, failed_list
 
     def _export_employees_to_excel(self):
         """Seçili cihazdaki personelleri XLS olarak dışa aktar."""

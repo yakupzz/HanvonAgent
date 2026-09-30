@@ -80,6 +80,14 @@ def tab(qtbot, session, device):
     return widget
 
 
+@pytest.fixture(autouse=True)
+def _no_info_popups():
+    """Başarı mesajı (QMessageBox.information) testleri modal pencereyle kilitlemesin.
+    Mesajı doğrulayan testler kendi patch'leriyle bunu ezer."""
+    with patch("ui.tabs.device_mgmt_tab.QMessageBox.information"):
+        yield
+
+
 def _load(tab, employees, device):
     """Tabloyu verilen personellerle doldur."""
     tab.current_device_id = device.id
@@ -484,3 +492,261 @@ class TestFetchStatusIcons:
         tab.device_combo.setCurrentIndex(0)  # "Cihaz Seçiniz"
         tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
         assert _status_icon(tab, _row_of(tab, 100)) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Diğer cihazlara da gönder — aynı personel ID'si başka cihazlarda kayıtlıysa
+# ─────────────────────────────────────────────────────────────────────────────
+
+from PySide6.QtWidgets import QMessageBox
+
+
+@pytest.fixture
+def pending_with_sibling(session, device):
+    """dev1'de ID 218 bekleyen isimle; dev2'de aynı ID eski isimle."""
+    dev2 = Device(name="Yonetim", ip="172.16.1.219", enabled=True)
+    session.add(dev2)
+    session.commit()
+    emp = Employee(employee_device_id=218, name="GORKEM SERBES KAYM",
+                   pending_name="GORKEM SERBES", sync_status="yeni", device_id=device.id)
+    sib = Employee(employee_device_id=218, name="GORKEM SERBES KAYM", device_id=dev2.id)
+    session.add_all([emp, sib])
+    session.commit()
+    return emp, sib, dev2
+
+
+def _workers_mock():
+    """Her çağrıda ayrı worker mock'u döndüren DevicePushWorker yerine geçen."""
+    created = []
+
+    def factory(employee_id, device_id):
+        w = MagicMock()
+        w.args = (employee_id, device_id)
+        created.append(w)
+        return w
+    return created, factory
+
+
+def _finish(worker, success, msg=""):
+    """Worker'ın finished sinyaline bağlanan callback'i elle tetikle."""
+    callback = worker.finished.connect.call_args.args[0]
+    callback(success, msg)
+
+
+class TestSendToOtherDevices:
+    def test_yes_sends_to_all_devices(self, tab, session, device, pending_with_sibling):
+        emp, sib, dev2 = pending_with_sibling
+        _load(tab, [emp], device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory), \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.question",
+                      return_value=QMessageBox.Yes) as ask:
+            tab._send_employee_to_device(emp)
+        ask.assert_called_once()
+        assert "Yonetim" in ask.call_args.args[2]
+        assert sorted(w.args for w in created) == sorted([(emp.id, device.id), (sib.id, dev2.id)])
+        assert all(w.start.called for w in created)
+        session.refresh(sib)
+        assert sib.pending_name == "GORKEM SERBES"
+
+    def test_no_sends_only_current_device(self, tab, session, device, pending_with_sibling):
+        emp, sib, _ = pending_with_sibling
+        _load(tab, [emp], device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory), \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.question", return_value=QMessageBox.No):
+            tab._send_employee_to_device(emp)
+        assert [w.args for w in created] == [(emp.id, device.id)]
+        session.refresh(sib)
+        assert sib.pending_name is None
+
+    def test_cancel_sends_nothing(self, tab, session, device, pending_with_sibling):
+        emp, _, _ = pending_with_sibling
+        _load(tab, [emp], device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory), \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.question",
+                      return_value=QMessageBox.Cancel):
+            tab._send_employee_to_device(emp)
+        assert created == []
+
+    def test_no_question_when_sibling_already_has_name(self, tab, session, device,
+                                                       pending_with_sibling):
+        emp, sib, _ = pending_with_sibling
+        sib.name = "GORKEM SERBES"
+        session.commit()
+        _load(tab, [emp], device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory), \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.question") as ask:
+            tab._send_employee_to_device(emp)
+        ask.assert_not_called()
+        assert len(created) == 1
+
+    def test_multi_device_summary_reports_each_device(self, tab, session, device,
+                                                      pending_with_sibling):
+        emp, _, _ = pending_with_sibling
+        _load(tab, [emp], device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory), \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.question", return_value=QMessageBox.Yes):
+            tab._send_employee_to_device(emp)
+
+        by_device = {w.args[1]: w for w in created}
+        with patch("ui.tabs.device_mgmt_tab.QMessageBox.warning") as warn, \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.information") as info, \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.critical") as crit:
+            _finish(by_device[device.id], True)
+            warn.assert_not_called()  # grup bitmeden özet yok
+            _finish([w for d, w in by_device.items() if d != device.id][0], False, "zaman aşımı")
+        info.assert_not_called()
+        crit.assert_not_called()  # tek tek hata kutusu yerine tek özet
+        warn.assert_called_once()
+        text = warn.call_args.args[2]
+        assert "✅ Cihaz" in text and "❌ Yonetim" in text and "zaman aşımı" in text
+        assert tab._active_workers == []
+
+    def test_success_reloads_current_device_not_sibling_device(self, tab, session, device,
+                                                               pending_with_sibling):
+        emp, sib, _ = pending_with_sibling
+        _load(tab, [emp], device)
+        with patch.object(tab, "_load_employees") as mock_load:
+            tab.on_push_finished(True, "", sib)
+        mock_load.assert_called_once_with(device.id)
+
+
+class TestBulkSendToOtherDevices:
+    def _run_bulk(self, tab, answer):
+        from PySide6.QtWidgets import QDialog
+        clients = {}
+
+        def client_factory(ip, port=None, comm_key=None):
+            c = MagicMock()
+            c.set_name_table.return_value = True
+            clients[ip] = c
+            return c
+
+        with patch("ui.tabs.device_mgmt_tab.HanvonClient", side_effect=client_factory), \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.question",
+                      side_effect=[QMessageBox.Yes, answer]), \
+                patch.object(QDialog, "exec", lambda self: None):
+            tab._bulk_send_employees()
+        return clients
+
+    def _select(self, tab, device):
+        tab.device_combo.addItem("test", device.id)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+
+    def test_yes_sends_to_both_devices(self, tab, session, device, pending_with_sibling):
+        emp, sib, dev2 = pending_with_sibling
+        self._select(tab, device)
+        clients = self._run_bulk(tab, QMessageBox.Yes)
+        assert set(clients) == {device.ip, dev2.ip}
+        for c in clients.values():
+            c.set_name_table.assert_called_once_with({"218": "GORKEM SERBES"})
+        session.refresh(emp)
+        session.refresh(sib)
+        assert emp.name == sib.name == "GORKEM SERBES"
+        assert emp.sync_status == sib.sync_status == "ok"
+
+    def test_no_sends_only_current_device(self, tab, session, device, pending_with_sibling):
+        emp, sib, _ = pending_with_sibling
+        self._select(tab, device)
+        clients = self._run_bulk(tab, QMessageBox.No)
+        assert set(clients) == {device.ip}
+        session.refresh(sib)
+        assert sib.name == "GORKEM SERBES KAYM"
+        assert sib.pending_name is None
+
+    def test_other_device_unreachable_keeps_its_pending(self, tab, session, device,
+                                                        pending_with_sibling):
+        """İkinci cihaza bağlanılamazsa: ilk cihaz güncellenir, kardeş 'Düzenlendi' kalır."""
+        from PySide6.QtWidgets import QDialog
+        emp, sib, dev2 = pending_with_sibling
+        self._select(tab, device)
+
+        def client_factory(ip, port=None, comm_key=None):
+            c = MagicMock()
+            c.set_name_table.return_value = True
+            if ip == dev2.ip:
+                c.connect.side_effect = ConnectionError("cihaza ulaşılamadı")
+            return c
+
+        with patch("ui.tabs.device_mgmt_tab.HanvonClient", side_effect=client_factory), \
+                patch("ui.tabs.device_mgmt_tab.QMessageBox.question",
+                      side_effect=[QMessageBox.Yes, QMessageBox.Yes]), \
+                patch.object(QDialog, "exec", lambda self: None):
+            tab._bulk_send_employees()
+
+        session.refresh(emp)
+        session.refresh(sib)
+        assert emp.name == "GORKEM SERBES" and emp.sync_status == "ok"
+        assert sib.name == "GORKEM SERBES KAYM"
+        assert sib.pending_name == "GORKEM SERBES" and sib.sync_status == "yeni"
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Çift tıklama koruması — gönderim sürerken ⏳, ikinci 📤 yok sayılır
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _action_texts(tab, row):
+    from PySide6.QtWidgets import QPushButton
+    widget = tab.employee_table.cellWidget(row, ACTION_COL)
+    return {b.text(): b.isEnabled() for b in widget.findChildren(QPushButton)}
+
+
+class TestDoubleClickGuard:
+    def test_second_click_while_sending_is_ignored(self, tab, employees, device):
+        _load(tab, employees, device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory):
+            tab._send_employee_to_device(employees[1])
+            tab._send_employee_to_device(employees[1])
+        assert len(created) == 1
+
+    def test_row_shows_disabled_hourglass_while_sending(self, tab, employees, device):
+        _load(tab, employees, device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory):
+            tab._send_employee_to_device(employees[1])
+        texts = _action_texts(tab, _row_of(tab, 200))
+        assert texts.get("⏳") is False  # görünür ama tıklanamaz
+        assert "📤" not in texts
+
+    def test_failure_restores_send_button_and_allows_retry(self, tab, employees, device):
+        _load(tab, employees, device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory),                 patch("ui.tabs.device_mgmt_tab.QMessageBox.critical"):
+            tab._send_employee_to_device(employees[1])
+            _finish(created[0], False, "zaman aşımı")
+            texts = _action_texts(tab, _row_of(tab, 200))
+            assert "📤" in texts and "⏳" not in texts
+            tab._send_employee_to_device(employees[1])
+        assert len(created) == 2
+        assert tab._active_workers == [created[1]]
+
+    def test_bulk_send_skips_employee_already_sending(self, tab, session, employees, device):
+        from PySide6.QtWidgets import QDialog
+        tab.device_combo.addItem("test", device.id)
+        tab.device_combo.setCurrentIndex(tab.device_combo.count() - 1)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory):
+            tab._send_employee_to_device(tab.current_employees[1])
+        with patch("ui.tabs.device_mgmt_tab.HanvonClient") as client_cls,                 patch("ui.tabs.device_mgmt_tab.QMessageBox.information") as info,                 patch.object(QDialog, "exec", lambda self: None):
+            tab._bulk_send_employees()
+        client_cls.assert_not_called()  # tek bekleyen zaten gönderiliyor
+        info.assert_called_once()
+
+
+class TestSendSuccessMessage:
+    def test_single_success_names_device(self, tab, employees, device):
+        _load(tab, employees, device)
+        created, factory = _workers_mock()
+        with patch("ui.tabs.device_mgmt_tab.DevicePushWorker", side_effect=factory):
+            tab._send_employee_to_device(employees[1])
+        with patch("ui.tabs.device_mgmt_tab.QMessageBox.information") as info:
+            _finish(created[0], True)
+        info.assert_called_once()
+        text = info.call_args.args[2]
+        assert "Cihaz (172.16.1.218)" in text and "200" in text

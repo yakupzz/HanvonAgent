@@ -321,3 +321,198 @@ class TestWaitLoopLimit:
 
         # recv: 1 ilk + MAX_WAIT_RETRIES tekrar
         assert mock_socket.recv.call_count <= HanvonClient.MAX_WAIT_RETRIES + 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Türkçe karakter — cihaz elle girilmiş isimleri cp1254 ile gönderir
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestResponseDecoding:
+    @patch('socket.socket')
+    def test_cp1254_name_is_decoded(self, mock_socket_class):
+        """0xC7/0xD6/0xDC (Ç/Ö/Ü) UTF-8 değil — okuma hata vermeden Türkçe dönmeli."""
+        mock_socket = Mock()
+        mock_socket.recv.return_value = (
+            'Return(result="success" id="75" name="ÇAĞLAR ÖZ ÜNAL" card_num="0")'
+        ).encode('cp1254')
+        client = HanvonClient("172.16.1.218")
+        client.socket = mock_socket
+        emp = client.get_employee("75")
+        assert emp['name'] == "ÇAĞLAR ÖZ ÜNAL"
+
+    @patch('socket.socket')
+    def test_utf8_still_preferred(self, mock_socket_class):
+        mock_socket = Mock()
+        mock_socket.recv.return_value = 'Return(result="success" name="ŞULE")'.encode('utf-8')
+        client = HanvonClient("172.16.1.218")
+        client.socket = mock_socket
+        assert client.get_employee("1")['name'] == "ŞULE"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Zaman sınırları — bağlanma kısa, cevap bekleme uzun
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTimeouts:
+    def test_defaults(self):
+        assert HanvonClient.DEFAULT_CONNECT_TIMEOUT == 10
+        assert HanvonClient.DEFAULT_TIMEOUT == 25
+
+    @patch('socket.socket')
+    def test_connect_uses_connect_timeout_then_read_timeout(self, mock_socket_class):
+        from unittest.mock import call
+        mock_socket = Mock()
+        mock_socket_class.return_value = mock_socket
+        client = HanvonClient("172.16.1.218")
+        client.connect()
+        try:
+            assert mock_socket.settimeout.call_args_list == [call(10), call(25)]
+        finally:
+            client.disconnect()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cihaz başına kilit — aynı cihaza aynı anda tek bağlantı
+# ─────────────────────────────────────────────────────────────────────────────
+
+import threading
+import time as _time
+from core.hanvon_client import DeviceBusyError
+
+
+@pytest.fixture
+def fake_socket():
+    with patch('socket.socket') as mock_socket_class:
+        mock_socket_class.side_effect = lambda *a, **k: Mock()
+        yield mock_socket_class
+
+
+class TestDeviceLock:
+    def test_second_connection_to_same_device_is_busy(self, fake_socket):
+        first = HanvonClient("10.0.0.1")
+        second = HanvonClient("10.0.0.1", busy_wait=0.1)
+        first.connect()
+        try:
+            with pytest.raises(DeviceBusyError):
+                second.connect()
+        finally:
+            first.disconnect()
+        second.connect()  # ilki bırakınca bağlanabilir
+        second.disconnect()
+
+    def test_busy_message_names_device(self, fake_socket):
+        first = HanvonClient("10.0.0.2")
+        first.connect()
+        try:
+            with pytest.raises(DeviceBusyError, match="10.0.0.2"):
+                HanvonClient("10.0.0.2", busy_wait=0.05).connect()
+        finally:
+            first.disconnect()
+
+    def test_different_devices_do_not_block(self, fake_socket):
+        a = HanvonClient("10.0.0.3")
+        b = HanvonClient("10.0.0.4", busy_wait=0.1)
+        a.connect()
+        b.connect()
+        a.disconnect()
+        b.disconnect()
+
+    def test_same_ip_different_port_do_not_block(self, fake_socket):
+        a = HanvonClient("10.0.0.5", port=9922)
+        b = HanvonClient("10.0.0.5", port=9923, busy_wait=0.1)
+        a.connect()
+        b.connect()
+        a.disconnect()
+        b.disconnect()
+
+    def test_failed_connect_releases_lock(self, fake_socket):
+        broken = Mock()
+        broken.connect.side_effect = TimeoutError("timed out")
+        fake_socket.side_effect = [broken, Mock()]
+        with pytest.raises(TimeoutError):
+            HanvonClient("10.0.0.6").connect()
+        ok = HanvonClient("10.0.0.6", busy_wait=0.1)
+        ok.connect()
+        ok.disconnect()
+
+    def test_reconnect_same_client_does_not_deadlock(self, fake_socket):
+        client = HanvonClient("10.0.0.7", busy_wait=0.1)
+        client.connect()
+        client.connect()  # açıkken tekrar connect → önce kendi kilidini bırakır
+        client.disconnect()
+
+    def test_forgotten_disconnect_released_on_gc(self, fake_socket):
+        import gc
+        leaked = HanvonClient("10.0.0.8")
+        leaked.connect()
+        del leaked
+        gc.collect()
+        c = HanvonClient("10.0.0.8", busy_wait=0.1)
+        c.connect()
+        c.disconnect()
+
+    def test_waiter_proceeds_after_holder_releases(self, fake_socket):
+        holder = HanvonClient("10.0.0.9")
+        holder.connect()
+        result = {}
+
+        def worker():
+            c = HanvonClient("10.0.0.9", busy_wait=5)
+            c.connect()
+            result["connected_at"] = _time.monotonic()
+            c.disconnect()
+
+        t = threading.Thread(target=worker)
+        t.start()
+        _time.sleep(0.2)
+        released_at = _time.monotonic()
+        holder.disconnect()
+        t.join(timeout=5)
+        assert result["connected_at"] >= released_at
+
+    def test_main_thread_waits_short_background_waits_long(self):
+        client = HanvonClient("10.0.0.10")
+        assert client._busy_wait() == HanvonClient.BUSY_WAIT_MAIN_THREAD
+        seen = {}
+        t = threading.Thread(target=lambda: seen.setdefault("wait", client._busy_wait()))
+        t.start()
+        t.join()
+        assert seen["wait"] == HanvonClient.BUSY_WAIT_BACKGROUND
+        assert HanvonClient.BUSY_WAIT_MAIN_THREAD < HanvonClient.BUSY_WAIT_BACKGROUND
+
+
+class TestSetNameTableVerification:
+    def test_verification_uses_fresh_connection(self, fake_socket):
+        """İki timeout sonrası GetEmployee doğrulaması YENİ soketten yapılmalı —
+        eski sokette cihazın geç gelen SetNameTable cevabı bekliyor olabilir."""
+        import socket as _socket
+        first, retry, verify = Mock(), Mock(), Mock()
+        first.recv.side_effect = _socket.timeout("timed out")
+        retry.recv.side_effect = _socket.timeout("timed out")
+        verify.recv.return_value = b'Return(result="success" id="218" name="GORKEM SERBES")'
+        fake_socket.side_effect = [first, retry, verify]
+
+        client = HanvonClient("10.0.1.1")
+        client.connect()
+        try:
+            assert client.set_name_table({"218": "GORKEM SERBES"}) is True
+        finally:
+            client.disconnect()
+        assert fake_socket.call_count == 3
+        assert b"GetEmployee" in verify.sendall.call_args.args[0]
+        assert not any(b"GetEmployee" in c.args[0] for c in retry.sendall.call_args_list)
+
+    def test_verification_name_mismatch_fails(self, fake_socket):
+        import socket as _socket
+        first, retry, verify = Mock(), Mock(), Mock()
+        first.recv.side_effect = _socket.timeout("timed out")
+        retry.recv.side_effect = _socket.timeout("timed out")
+        verify.recv.return_value = b'Return(result="success" id="218" name="ESKI ISIM")'
+        fake_socket.side_effect = [first, retry, verify]
+
+        client = HanvonClient("10.0.1.2")
+        client.connect()
+        try:
+            assert client.set_name_table({"218": "GORKEM SERBES"}) is False
+        finally:
+            client.disconnect()

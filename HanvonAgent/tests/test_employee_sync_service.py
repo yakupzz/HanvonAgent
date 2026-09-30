@@ -168,3 +168,66 @@ class TestPushEmployee:
 
         assert ok is True
         client.set_employee.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Kardeş kayıtlar — aynı personel ID'si başka cihazlarda
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def second_device(db_session):
+    device = Device(name="Yonetim", ip="172.16.1.219", enabled=True)
+    db_session.add(device)
+    db_session.commit()
+    return device
+
+
+@pytest.fixture
+def sibling(db_session, second_device):
+    """sample_employee (ID 237) ile aynı ID, ikinci cihazda, eski isimle."""
+    emp = Employee(employee_device_id=237, name="Eski İsim", device_id=second_device.id)
+    db_session.add(emp)
+    db_session.commit()
+    return emp
+
+
+class TestFindSiblings:
+    def test_returns_same_id_on_other_devices(self, db_session, sample_employee, sibling):
+        other_id = Employee(employee_device_id=999, name="Baska", device_id=sibling.device_id)
+        db_session.add(other_id)
+        db_session.commit()
+        assert svc.find_siblings(db_session, sample_employee) == [sibling]
+
+    def test_no_siblings(self, db_session, sample_employee):
+        assert svc.find_siblings(db_session, sample_employee) == []
+
+
+class TestSiblingsToUpdate:
+    def test_sibling_with_old_name_needs_update(self, db_session, sample_employee, sibling):
+        svc.mark_pending(db_session, sample_employee, "Yeni İsim")
+        assert svc.siblings_to_update(db_session, sample_employee) == [sibling]
+
+    def test_sibling_already_has_new_name_skipped(self, db_session, sample_employee, sibling):
+        sibling.name = "Yeni İsim"
+        db_session.commit()
+        svc.mark_pending(db_session, sample_employee, "Yeni İsim")
+        assert svc.siblings_to_update(db_session, sample_employee) == []
+
+    def test_no_pending_means_nothing_to_update(self, db_session, sample_employee, sibling):
+        assert svc.siblings_to_update(db_session, sample_employee) == []
+
+
+class TestPropagatePending:
+    def test_marks_siblings_pending_with_same_name(self, db_session, sample_employee, sibling):
+        svc.mark_pending(db_session, sample_employee, "Yeni İsim")
+        result = svc.propagate_pending(db_session, sample_employee)
+        assert result == [sibling]
+        db_session.refresh(sibling)
+        assert sibling.pending_name == "Yeni İsim"
+        assert sibling.sync_status == "yeni"
+        assert sibling.name == "Eski İsim"  # cihaz onaylayana kadar name değişmez
+
+    def test_nothing_to_propagate_without_pending(self, db_session, sample_employee, sibling):
+        assert svc.propagate_pending(db_session, sample_employee) == []
+        db_session.refresh(sibling)
+        assert sibling.pending_name is None

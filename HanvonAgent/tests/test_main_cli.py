@@ -77,11 +77,54 @@ def test_no_flag_launches_gui(monkeypatch):
 
     with patch("main.QApplication", return_value=fake_app) as QApp, patch(
         "main.MainWindow"
-    ) as Window, patch("main.init_db"), patch("main.sys.exit"):
+    ) as Window, patch("main.init_db"), patch("main.sys.exit"), patch(
+        "main.SingleInstance"
+    ) as Guard:
+        Guard.return_value.acquire.return_value = True
         main_module.main()
 
     QApp.assert_called_once()
     Window.assert_called_once()
+
+
+def test_second_gui_instance_activates_first_and_exits(monkeypatch):
+    """Uygulama zaten açıksa: yeni pencere/scheduler yok, açık olan öne gelir."""
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py"])
+
+    with patch("main.QApplication", return_value=MagicMock()), patch(
+        "main.MainWindow"
+    ) as Window, patch("main.init_db"), patch("main.sys.exit") as sys_exit, patch(
+        "main.SingleInstance"
+    ) as Guard:
+        Guard.return_value.acquire.return_value = False
+        Guard.return_value.notify_primary.return_value = True
+        main_module.main()
+
+    Guard.return_value.notify_primary.assert_called_once()
+    Window.assert_not_called()
+    sys_exit.assert_called_once_with(0)
+
+
+def test_first_instance_brings_window_forward_on_activation(monkeypatch):
+    monkeypatch.setattr(main_module.sys, "argv", ["main.py"])
+    fake_app = MagicMock()
+    fake_app.exec.return_value = 0
+
+    with patch("main.QApplication", return_value=fake_app), patch(
+        "main.MainWindow"
+    ) as Window, patch("main.init_db"), patch("main.sys.exit"), patch(
+        "main.SingleInstance"
+    ) as Guard:
+        Guard.return_value.acquire.return_value = True
+        main_module.main()
+
+    callback = Guard.return_value.activated.connect.call_args.args[0]
+    window = Window.return_value
+    window.reset_mock()
+    callback()
+    window.showNormal.assert_called_once()
+    window.raise_.assert_called_once()
+    window.activateWindow.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

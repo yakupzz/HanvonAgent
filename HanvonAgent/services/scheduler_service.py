@@ -213,9 +213,11 @@ def _run_auto_fetch(device_id: int):
             from core.hanvon_client import HanvonClient
             try:
                 client = HanvonClient(device.ip, port=device.port, comm_key=device.comm_key)
-                client.connect()
-                ok = client.delete_all_records_now()
-                client.disconnect()
+                try:
+                    client.connect()
+                    ok = client.delete_all_records_now()
+                finally:
+                    client.disconnect()
                 if ok:
                     logger.info(
                         f"[OTOMATIK CEKME LOGU] {device.name}: cihazdaki G/C kayıtları silindi"

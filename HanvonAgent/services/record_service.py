@@ -51,9 +51,10 @@ class RecordService:
                 start_time=f"{start_date} 0:0:0",
                 end_time=f"{end_date} 23:59:59",
             )
-            client.disconnect()
         except Exception as e:
             raise RuntimeError(f"Failed to fetch records from {device.ip}: {str(e)}")
+        finally:
+            client.disconnect()
 
         # Dosya path'ı hazırla
         import logging

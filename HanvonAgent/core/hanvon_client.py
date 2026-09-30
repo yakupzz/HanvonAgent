@@ -5,22 +5,47 @@ Referans: D:\Projeler\F710\referans\lib\hanvon\client.rb
 """
 
 import socket
+import threading
 import time
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from core.hanvon_crypto import HanvonCrypto
 from core.record_parser import RecordParser
 
 logger = logging.getLogger("HanvonAgent.TCP")
 
 
+class DeviceBusyError(RuntimeError):
+    """Cihazla başka bir bağlantı zaten konuşuyor ve bekleme süresi doldu."""
+
+
+# Cihaz başına (ip, port) kilit — cihaz aynı anda tek komutla ilgilenebiliyor;
+# paralel bağlantılar birbirini zaman aşımına düşürüyor (2026-09-30 teşhisi).
+_device_locks: Dict[Tuple[str, int], threading.Lock] = {}
+_device_locks_guard = threading.Lock()
+
+
+def _device_lock(ip: str, port: int) -> threading.Lock:
+    with _device_locks_guard:
+        return _device_locks.setdefault((ip, int(port)), threading.Lock())
+
+
 class HanvonClient:
-    """Hanvon F710 TCP client."""
+    """Hanvon F710 TCP client.
+
+    connect() cihaz kilidini alır, disconnect() bırakır: aynı cihaza aynı anda
+    yalnız bir bağlantı açılır, diğerleri sırasını bekler.
+    """
 
     DEFAULT_PORT = 9922
-    DEFAULT_TIMEOUT = 10
+    DEFAULT_CONNECT_TIMEOUT = 10  # TCP bağlanma — kapalı cihaz hızlı hata versin
+    DEFAULT_TIMEOUT = 25          # Cevap bekleme — SetNameTable ~7-9 sn sürebiliyor
     BUFFER_SIZE = 1024
     MAX_WAIT_RETRIES = 30  # Wait() döngü sınırı (30 × 2sn = 60sn)
+    # Cihaz meşgulken kilit bekleme süresi: GUI thread'i uzun donmasın,
+    # arka plan işleri (push worker, otomatik çekme) sırasını beklesin.
+    BUSY_WAIT_MAIN_THREAD = 5
+    BUSY_WAIT_BACKGROUND = 300
 
     def __init__(
         self,
@@ -28,46 +53,105 @@ class HanvonClient:
         port: int = DEFAULT_PORT,
         comm_key: Optional[str] = None,
         timeout: int = DEFAULT_TIMEOUT,
+        connect_timeout: int = DEFAULT_CONNECT_TIMEOUT,
+        busy_wait: Optional[float] = None,
     ):
         """
         Args:
             ip: Cihaz IP adresi
             port: TCP port (varsayılan 9922)
             comm_key: CommKey şifresi (1-8 rakam) veya None
-            timeout: Socket timeout saniye cinsinden
+            timeout: Cevap bekleme (okuma/yazma) timeout'u, saniye
+            connect_timeout: TCP bağlanma timeout'u, saniye
+            busy_wait: Cihaz kilidi için en fazla bekleme (sn). None ise
+                       thread'e göre seçilir (bkz. _busy_wait).
         """
         self.ip = ip
         self.port = port
         self.comm_key = comm_key
         self.timeout = timeout
+        self.connect_timeout = connect_timeout
+        self.busy_wait = busy_wait
         self.socket: Optional[socket.socket] = None
+        self._lock: Optional[threading.Lock] = None
         self.crypto = HanvonCrypto(comm_key) if comm_key else None
         self.parser = RecordParser()
 
+    def _busy_wait(self) -> float:
+        """Kilit bekleme süresi — ana (GUI) thread kısa, arka plan uzun bekler."""
+        if self.busy_wait is not None:
+            return self.busy_wait
+        if threading.current_thread() is threading.main_thread():
+            return self.BUSY_WAIT_MAIN_THREAD
+        return self.BUSY_WAIT_BACKGROUND
+
     def connect(self) -> bool:
         """
-        Cihaza TCP bağlantı kur.
+        Cihaz kilidini al ve TCP bağlantı kur.
 
         Returns:
             Başarı durumu
 
         Raises:
+            DeviceBusyError: Cihazla başka bağlantı konuşuyor, bekleme doldu
             socket.error: Bağlantı hatası
         """
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.settimeout(self.timeout)
-        self.socket.connect((self.ip, self.port))
+        if self.socket is not None or self._lock is not None:
+            self.disconnect()  # açık bağlantı varsa kendi kilidini bırak
+
+        wait = self._busy_wait()
+        lock = _device_lock(self.ip, self.port)
+        if not lock.acquire(timeout=wait):
+            raise DeviceBusyError(
+                f"Cihaz meşgul ({self.ip}:{self.port}): başka bir işlem bu cihazla "
+                f"konuşuyor, {wait:g} sn beklendi. İşlem bitince tekrar deneyin."
+            )
+        self._lock = lock
+
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(self.connect_timeout)
+            sock.connect((self.ip, self.port))
+            sock.settimeout(self.timeout)
+        except BaseException:
+            self._release_lock()
+            raise
+        self.socket = sock
         return True
 
     def disconnect(self) -> bool:
-        """Bağlantıyı kapat."""
+        """Bağlantıyı kapat ve cihaz kilidini bırak."""
         if self.socket:
             try:
                 self.socket.close()
             except Exception:
                 pass
             self.socket = None
+        self._release_lock()
         return True
+
+    def _release_lock(self) -> None:
+        lock, self._lock = self._lock, None
+        if lock is not None:
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
+
+    def __del__(self):
+        # disconnect() unutulan yollarda kilit sonsuza dek kalmasın
+        try:
+            self.disconnect()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _decode(data: bytes) -> str:
+        """Cihaz yanıtını çöz — UTF-8 değilse cp1254 (cihazda elle girilen Ç/Ö/Ü)."""
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            return data.decode('cp1254', errors='replace')
 
     def send_command(self, command: str) -> str:
         """
@@ -159,9 +243,9 @@ class HanvonClient:
                 # Son ) 'e kadar al
                 end_idx = full_data.rfind(b')') + 1
                 response_bytes = full_data[:end_idx]
-                return response_bytes.decode('utf-8')
+                return self._decode(response_bytes)
 
-        return full_data.decode('utf-8')
+        return self._decode(full_data)
 
     # Komut wrappers
 
@@ -362,11 +446,14 @@ class HanvonClient:
             )
 
         # İkinci timeout: cihaz ACK göndermeden işlemi tamamlamış olabilir.
-        # Beklenen ismi GetEmployee ile doğrula.
+        # Beklenen ismi GetEmployee ile doğrula — YENİ bağlantıyla: eski sokette
+        # cihazın geç gelen SetNameTable cevabı bekliyor olabilir (akış kayar).
         if len(name_updates) == 1:
             emp_id, expected_name = next(iter(name_updates.items()))
             expected_ascii = self._ascii_name(expected_name)
             try:
+                self.disconnect()
+                self.connect()
                 verify = self.get_employee(emp_id)
                 if verify and verify.get('name', '') == expected_ascii:
                     logger.info(
